@@ -115,6 +115,7 @@ const routes = {
   add: viewAdd,
   import: viewImport,
   deckset: viewDeckSettings,
+  stats: viewStats,
 };
 
 async function render() {
@@ -184,7 +185,8 @@ async function viewDecks() {
   }).join('');
 
   $app.innerHTML = `
-    ${topbar('Flash', { back: null, right: `<button class="iconbtn" id="import-btn" title="Import .apkg">⬆</button>` })}
+    ${topbar('Flash', { back: null, right: `<button class="iconbtn" id="stats-btn" title="Statistics">📊</button>
+      <button class="iconbtn" id="import-btn" title="Import .apkg">⬆</button>` })}
     ${decks.length ? rows : '<p class="notice" style="text-align:center;margin-top:60px">No decks yet.<br>Import an .apkg file or create a deck below.</p>'}
     <div class="actions">
       <button id="new-deck">＋ New deck</button>
@@ -211,6 +213,7 @@ async function viewDecks() {
     await api('/decks', { method: 'POST', body: JSON.stringify({ name }) });
     render();
   };
+  document.getElementById('stats-btn').onclick = () => { location.hash = '#stats'; };
   document.getElementById('import-btn').onclick = () => { location.hash = '#import'; };
   document.getElementById('import-btn2').onclick = () => { location.hash = '#import'; };
   document.getElementById('nl').onchange = (e) => {
@@ -463,6 +466,132 @@ async function viewAdd(deckId) {
       document.getElementById('err').textContent = err.message;
     }
   };
+}
+
+// ---------- stats ----------
+
+// Rounded-top bar chart as inline SVG; single hue, tooltip per bar.
+function barChartSVG(values, { tipLabel }) {
+  const W = 340, H = 110, PAD_TOP = 14, PAD_BOT = 16;
+  const plotH = H - PAD_TOP - PAD_BOT;
+  const max = Math.max(1, ...values);
+  const n = values.length;
+  const gap = 2;
+  const bw = (W - gap * (n - 1)) / n;
+  const r = Math.min(3, bw / 2);
+
+  const bars = values.map((v, i) => {
+    const h = Math.max(v > 0 ? 2 : 0, (v / max) * plotH);
+    const x = i * (bw + gap);
+    const y = PAD_TOP + plotH - h;
+    if (!h) return `<g data-i="${i}"><rect class="hit" x="${x}" y="${PAD_TOP}" width="${bw}" height="${plotH}" fill="transparent"/></g>`;
+    // rounded top corners only, anchored to the baseline
+    const path = `M${x},${y + h} L${x},${y + r} Q${x},${y} ${x + r},${y} L${x + bw - r},${y} Q${x + bw},${y} ${x + bw},${y + r} L${x + bw},${y + h} Z`;
+    return `<g data-i="${i}">
+      <path d="${path}" fill="var(--accent)"/>
+      <rect class="hit" x="${x}" y="${PAD_TOP}" width="${bw}" height="${plotH}" fill="transparent"/>
+    </g>`;
+  }).join('');
+
+  const mid = PAD_TOP + plotH / 2;
+  return `<div class="chart-wrap">
+    <svg viewBox="0 0 ${W} ${H}" data-tip="${esc(tipLabel)}">
+      <line x1="0" y1="${PAD_TOP}" x2="${W}" y2="${PAD_TOP}" class="grid"/>
+      <line x1="0" y1="${mid}" x2="${W}" y2="${mid}" class="grid"/>
+      <line x1="0" y1="${PAD_TOP + plotH}" x2="${W}" y2="${PAD_TOP + plotH}" class="grid strong"/>
+      <text x="${W}" y="${PAD_TOP - 4}" class="axis" text-anchor="end">${max}</text>
+      ${bars}
+    </svg>
+    <div class="charttip" hidden></div>
+  </div>`;
+}
+
+function attachBarTips(container, values, labelFor) {
+  container.querySelectorAll('.chart-wrap').forEach((wrap, w) => {
+    const tip = wrap.querySelector('.charttip');
+    const svg = wrap.querySelector('svg');
+    const show = (g) => {
+      const i = Number(g.dataset.i);
+      tip.textContent = labelFor(w, i, values[w][i]);
+      tip.hidden = false;
+      const gRect = g.getBoundingClientRect();
+      const wRect = wrap.getBoundingClientRect();
+      const x = Math.min(Math.max(gRect.x - wRect.x + gRect.width / 2, 44), wRect.width - 44);
+      tip.style.left = `${x}px`;
+    };
+    svg.addEventListener('pointerover', (e) => { const g = e.target.closest('g[data-i]'); if (g) show(g); });
+    svg.addEventListener('pointerdown', (e) => { const g = e.target.closest('g[data-i]'); if (g) show(g); });
+    svg.addEventListener('pointerleave', () => { tip.hidden = true; });
+  });
+}
+
+async function viewStats() {
+  $app.innerHTML = `${topbar('Statistics')}<p class="notice" style="text-align:center">Loading…</p>`;
+  const s = await api(`/stats/full?dayStart=${dayStart()}`);
+
+  const ratingTotal = s.ratings[1] + s.ratings[2] + s.ratings[3] + s.ratings[4];
+  const correctPct = ratingTotal ? Math.round(((ratingTotal - s.ratings[1]) / ratingTotal) * 100) : null;
+
+  const tiles = `
+    <div class="tiles">
+      <div class="tile"><div class="tile-n">${s.streak}<span class="tile-unit">d</span></div><div class="tile-l">🔥 Streak</div></div>
+      <div class="tile"><div class="tile-n">${s.perDay[29]}</div><div class="tile-l">Reviews today</div></div>
+      <div class="tile"><div class="tile-n">${correctPct === null ? '–' : correctPct + '%'}</div><div class="tile-l">Correct · 30d</div></div>
+      <div class="tile"><div class="tile-n">${s.totalCards}</div><div class="tile-l">Cards</div></div>
+    </div>`;
+
+  const RATING_META = [
+    [1, 'Again', 'var(--again)'], [2, 'Hard', 'var(--hard)'],
+    [3, 'Good', 'var(--good)'], [4, 'Easy', 'var(--easy)'],
+  ];
+  const maxRating = Math.max(1, ...RATING_META.map(([k]) => s.ratings[k]));
+  const ratingRows = RATING_META.map(([k, label, color]) => `
+    <div class="rrow">
+      <span class="rlabel">${label}</span>
+      <span class="rbar-track"><span class="rbar" style="width:${(s.ratings[k] / maxRating) * 100}%;background:${color}"></span></span>
+      <span class="rcount">${s.ratings[k]}</span>
+    </div>`).join('');
+
+  const learning = s.states.learning + s.states.relearning;
+  const STATE_META = [
+    ['New', s.states.new, 'var(--easy)'],
+    ['Learning', learning, 'var(--hard)'],
+    ['Review', s.states.review, 'var(--good)'],
+  ];
+  const stackSegs = STATE_META.filter(([, n]) => n > 0).map(([label, n, color]) =>
+    `<span class="seg" style="flex:${n};background:${color}" title="${label}"></span>`).join('');
+  const stateChips = STATE_META.map(([label, n, color]) =>
+    `<span class="chip"><span class="dot" style="background:${color}"></span>${label} <b>${n}</b></span>`).join('');
+
+  $app.innerHTML = `
+    ${topbar('Statistics')}
+    ${tiles}
+    <div class="panel">
+      <h3>Reviews · last 30 days</h3>
+      ${s.perDay.some((v) => v) ? barChartSVG(s.perDay, { tipLabel: 'reviews' }) : '<p class="notice">No reviews yet.</p>'}
+      <div class="xlabels"><span>30 days ago</span><span>today</span></div>
+    </div>
+    <div class="panel">
+      <h3>Due cards · next 14 days</h3>
+      ${s.forecast.some((v) => v) ? barChartSVG(s.forecast, { tipLabel: 'due' }) : '<p class="notice">Nothing scheduled yet.</p>'}
+      <div class="xlabels"><span>today</span><span>in 14 days</span></div>
+    </div>
+    <div class="panel">
+      <h3>Answers · last 30 days</h3>
+      ${ratingTotal ? ratingRows : '<p class="notice">No reviews yet.</p>'}
+    </div>
+    <div class="panel">
+      <h3>Card states</h3>
+      ${s.totalCards ? `<div class="stack">${stackSegs}</div><div class="chips">${stateChips}</div>` : '<p class="notice">No cards yet.</p>'}
+    </div>
+    <p class="statline">${s.totalReviews} reviews all time</p>`;
+
+  const dayName = (offset) => {
+    const d = new Date(dayStart() + offset * 86_400_000);
+    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  };
+  attachBarTips($app, [s.perDay, s.forecast], (w, i, v) =>
+    w === 0 ? `${dayName(i - 29)} · ${v} reviews` : `${dayName(i)} · ${v} due`);
 }
 
 // ---------- import ----------

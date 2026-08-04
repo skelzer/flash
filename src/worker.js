@@ -222,6 +222,56 @@ app.post('/api/cards/:id/review', async (c) => {
 
 // ---- stats ----
 
+const DAY = 86_400_000;
+
+app.get('/api/stats/full', async (c) => {
+  const dayStart = Number(c.req.query('dayStart') || Date.now());
+  const start30 = dayStart - 29 * DAY;
+  // anchor a year back so day indexes stay positive (SQLite CAST truncates toward zero)
+  const anchor = dayStart - 365 * DAY;
+
+  const [perDayRows, forecastRows, stateRows, ratingRows, activeDayRows, totals] = await Promise.all([
+    c.env.DB.prepare(
+      `SELECT CAST((reviewed_at - ?1) / ${DAY} AS INTEGER) AS d, COUNT(*) AS n
+       FROM reviews WHERE reviewed_at >= ?1 GROUP BY d`
+    ).bind(start30).all(),
+    c.env.DB.prepare(
+      `SELECT CAST(MAX(due - ?1, 0) / ${DAY} AS INTEGER) AS d, COUNT(*) AS n
+       FROM cards WHERE state != 'new' AND due < ?2 GROUP BY d`
+    ).bind(dayStart, dayStart + 14 * DAY).all(),
+    c.env.DB.prepare(`SELECT state, COUNT(*) AS n FROM cards GROUP BY state`).all(),
+    c.env.DB.prepare(
+      `SELECT rating, COUNT(*) AS n FROM reviews WHERE reviewed_at >= ? GROUP BY rating`
+    ).bind(start30).all(),
+    c.env.DB.prepare(
+      `SELECT DISTINCT CAST((reviewed_at - ?1) / ${DAY} AS INTEGER) AS d
+       FROM reviews WHERE reviewed_at >= ?1`
+    ).bind(anchor).all(),
+    c.env.DB.prepare('SELECT COUNT(*) AS cards, (SELECT COUNT(*) FROM reviews) AS reviews FROM cards').first(),
+  ]);
+
+  const perDay = Array(30).fill(0);
+  for (const r of perDayRows.results) if (r.d >= 0 && r.d < 30) perDay[r.d] = r.n;
+
+  const forecast = Array(14).fill(0);
+  for (const r of forecastRows.results) if (r.d >= 0 && r.d < 14) forecast[r.d] = r.n;
+
+  const states = { new: 0, learning: 0, review: 0, relearning: 0 };
+  for (const r of stateRows.results) states[r.state] = r.n;
+
+  const ratings = { 1: 0, 2: 0, 3: 0, 4: 0 };
+  for (const r of ratingRows.results) ratings[r.rating] = r.n;
+
+  // streak: consecutive active days ending today (365 = today relative to anchor);
+  // an idle today doesn't break yesterday's streak
+  const active = new Set(activeDayRows.results.map((r) => r.d));
+  let streak = 0;
+  const startDay = active.has(365) ? 365 : 364;
+  while (active.has(startDay - streak)) streak++;
+
+  return c.json({ perDay, forecast, states, ratings, streak, totalCards: totals.cards, totalReviews: totals.reviews });
+});
+
 app.get('/api/stats', async (c) => {
   const dayStart = Number(c.req.query('dayStart') || 0);
   const weekStart = dayStart - 6 * 86_400_000;
