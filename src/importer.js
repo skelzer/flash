@@ -42,11 +42,11 @@ export async function parseApkg(file) {
     throw new Error('No Anki collection found in this file — is it a .apkg export?');
   }
 
-  // in the browser the wasm is served from the site root; under Node (tests)
-  // sql.js finds it in node_modules on its own
+  // in the browser the wasm lives next to the page (root or /flash/); under
+  // Node (tests) sql.js finds it in node_modules on its own
   const SQL = typeof window === 'undefined'
     ? await initSqlJs()
-    : await initSqlJs({ locateFile: (f) => '/' + f });
+    : await initSqlJs({ locateFile: (f) => new URL(f, window.location.href).toString() });
   const db = new SQL.Database(dbBytes);
   try {
     return extract(db);

@@ -225,7 +225,7 @@ label { font-size: 13px; font-weight: 600; color: var(--muted); margin-bottom: -
 
 /* login */
 .login { margin-top: 24vh; display: flex; flex-direction: column; gap: 12px; text-align: center; }
-.login .logo { font-size: 52px; }
+.login .logo { width: 88px; height: 88px; margin: 0 auto; image-rendering: pixelated; }
 .login h1 { margin: 0; }
 
 .error { color: var(--again); font-size: 14px; text-align: center; margin: 8px 0; }

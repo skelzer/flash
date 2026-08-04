@@ -1,5 +1,8 @@
 const $app = document.getElementById('app');
 
+// Directory the app is served from: '/' on workers.dev, '/flash/' on the custom domain
+const BASE = location.pathname.replace(/[^/]*$/, '');
+
 // ---------- helpers ----------
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (ch) =>
@@ -18,7 +21,7 @@ function dayStart() {
 const newLimit = () => Number(localStorage.getItem('newLimit') || 20);
 
 async function api(path, opts = {}) {
-  const res = await fetch(`/api${path}`, {
+  const res = await fetch(`${BASE}api${path}`, {
     ...opts,
     headers: {
       'content-type': 'application/json',
@@ -142,7 +145,7 @@ function viewLogin() {
     const registering = mode === 'register';
     $app.innerHTML = `
       <div class="login">
-        <div class="logo">🃏</div>
+        <img class="logo" src="./wizard.gif" alt="Flash wizard" width="88" height="88">
         <h1>Flash</h1>
         <p class="notice">${registering ? 'Create your account' : 'Sign in to study'}</p>
         <input id="user" placeholder="Username" autocomplete="username" autocapitalize="none">
@@ -837,7 +840,7 @@ function loadImporter() {
   if (window.ApkgImporter) return Promise.resolve();
   return new Promise((resolve, reject) => {
     const s = document.createElement('script');
-    s.src = '/importer.js';
+    s.src = `${BASE}importer.js`;
     s.onload = resolve;
     s.onerror = () => reject(new Error('Could not load importer'));
     document.head.appendChild(s);

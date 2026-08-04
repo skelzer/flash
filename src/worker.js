@@ -410,4 +410,21 @@ app.get('/api/stats/full', async (c) => {
   });
 });
 
-export default app;
+// The app is served both at the workers.dev root and under luquematte.com/flash.
+// Requests carrying the /flash prefix are rewritten to root paths, then either
+// handled by the API or forwarded to the static assets.
+export default {
+  fetch(request, env, ctx) {
+    const url = new URL(request.url);
+    if (url.pathname === '/flash') {
+      url.pathname = '/flash/';
+      return Response.redirect(url.toString(), 301);
+    }
+    if (url.pathname.startsWith('/flash/')) {
+      url.pathname = url.pathname.slice('/flash'.length);
+      request = new Request(url.toString(), request);
+    }
+    if (url.pathname.startsWith('/api/')) return app.fetch(request, env, ctx);
+    return env.ASSETS.fetch(request);
+  },
+};

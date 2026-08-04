@@ -4,8 +4,16 @@
   "main": "src/worker.js",
   "compatibility_date": "2026-07-01",
   "assets": {
-    "directory": "public"
+    "directory": "public",
+    "binding": "ASSETS"
   },
+  "routes": [
+    // path route stays dormant until the apex DNS record is proxied (orange cloud)
+    { "pattern": "luquematte.com/flash*", "zone_name": "luquematte.com" },
+    // custom domain: Cloudflare creates the DNS record + certificate itself
+    { "pattern": "flash.luquematte.com", "custom_domain": true }
+  ],
+  "workers_dev": true,
   "d1_databases": [
     {
       "binding": "DB",
