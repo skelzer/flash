@@ -32,7 +32,7 @@ app.get('/api/decks', async (c) => {
   const now = Date.now();
   const dayStart = Number(c.req.query('dayStart') || 0);
   const { results } = await c.env.DB.prepare(
-    `SELECT d.id, d.name,
+    `SELECT d.id, d.name, d.front_lang, d.back_lang,
        COUNT(c.id) AS total,
        SUM(CASE WHEN c.state = 'new' THEN 1 ELSE 0 END) AS newCount,
        SUM(CASE WHEN c.state != 'new' AND c.due <= ?1 THEN 1 ELSE 0 END) AS dueCount,
@@ -52,9 +52,15 @@ app.post('/api/decks', async (c) => {
 });
 
 app.patch('/api/decks/:id', async (c) => {
-  const { name } = await c.req.json();
-  await c.env.DB.prepare('UPDATE decks SET name = ? WHERE id = ?')
-    .bind(name.trim(), c.req.param('id')).run();
+  const body = await c.req.json();
+  const deck = await c.env.DB.prepare('SELECT * FROM decks WHERE id = ?').bind(c.req.param('id')).first();
+  if (!deck) return c.json({ error: 'Deck not found' }, 404);
+  const name = (body.name ?? deck.name).trim();
+  const frontLang = body.front_lang ?? deck.front_lang;
+  const backLang = body.back_lang ?? deck.back_lang;
+  if (!name) return c.json({ error: 'Name required' }, 400);
+  await c.env.DB.prepare('UPDATE decks SET name = ?, front_lang = ?, back_lang = ? WHERE id = ?')
+    .bind(name, frontLang, backLang, deck.id).run();
   return c.json({ ok: true });
 });
 

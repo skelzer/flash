@@ -38,18 +38,58 @@ async function api(path, opts = {}) {
   return res.json();
 }
 
-function speak(html) {
+const LANGS = [
+  ['de-DE', 'German'], ['en-US', 'English'], ['es-ES', 'Spanish'], ['fr-FR', 'French'],
+  ['it-IT', 'Italian'], ['pt-PT', 'Portuguese'], ['nl-NL', 'Dutch'], ['pl-PL', 'Polish'],
+  ['ru-RU', 'Russian'], ['tr-TR', 'Turkish'], ['sv-SE', 'Swedish'], ['ja-JP', 'Japanese'],
+  ['zh-CN', 'Chinese'], ['ko-KR', 'Korean'], ['', 'No speech'],
+];
+
+let voicesPromise;
+function getVoicesAsync() {
+  const now = speechSynthesis.getVoices();
+  if (now.length) return Promise.resolve(now);
+  if (!voicesPromise) {
+    voicesPromise = new Promise((resolve) => {
+      speechSynthesis.addEventListener('voiceschanged', () => resolve(speechSynthesis.getVoices()), { once: true });
+      setTimeout(() => resolve(speechSynthesis.getVoices()), 1500);
+    });
+  }
+  return voicesPromise;
+}
+
+function toast(msg) {
+  document.querySelector('.toast')?.remove();
+  const el = document.createElement('div');
+  el.className = 'toast';
+  el.textContent = msg;
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 3500);
+}
+
+async function speak(html, lang) {
   const text = stripHtml(html);
-  if (!text || !('speechSynthesis' in window)) return;
+  if (!text || !lang || !('speechSynthesis' in window)) return;
+  const voices = await getVoicesAsync();
+  const target = lang.toLowerCase();
+  const prefix = target.split('-')[0];
+  const norm = (v) => v.lang.replace('_', '-').toLowerCase();
+  // exact region match first, then any voice of that language
+  const voice = voices.find((v) => norm(v) === target) || voices.find((v) => norm(v).startsWith(prefix));
+  if (!voice) {
+    // better silent than mispronounced by whatever the system default is
+    const label = LANGS.find(([code]) => code === lang)?.[1] || lang;
+    toast(`No ${label} voice installed on this device`);
+    return;
+  }
   speechSynthesis.cancel();
   const u = new SpeechSynthesisUtterance(text);
-  u.lang = 'de-DE';
+  u.lang = lang;
+  u.voice = voice;
   u.rate = 0.9;
-  const voice = speechSynthesis.getVoices().find((v) => v.lang.startsWith('de'));
-  if (voice) u.voice = voice;
   speechSynthesis.speak(u);
 }
-if ('speechSynthesis' in window) speechSynthesis.getVoices(); // warm up voice list
+if ('speechSynthesis' in window) getVoicesAsync(); // warm up voice list
 
 function topbar(title, { back = '#decks', right = '' } = {}) {
   return `<div class="topbar">
@@ -67,6 +107,7 @@ const routes = {
   browse: viewBrowse,
   add: viewAdd,
   import: viewImport,
+  deckset: viewDeckSettings,
 };
 
 async function render() {
@@ -154,7 +195,7 @@ async function viewDecks() {
   $app.querySelectorAll('.deck-menu').forEach((el) => {
     el.onclick = (e) => {
       e.stopPropagation();
-      deckMenu(el.dataset.id, el.dataset.name);
+      location.hash = `#deckset/${el.dataset.id}`;
     };
   });
   document.getElementById('new-deck').onclick = async () => {
@@ -171,22 +212,52 @@ async function viewDecks() {
   };
 }
 
-async function deckMenu(id, name) {
-  const choice = prompt(`Deck: ${name}\n\n1 = Browse cards\n2 = Add card\n3 = Rename\n4 = Delete deck\n\nEnter a number:`);
-  if (choice === '1') location.hash = `#browse/${id}`;
-  else if (choice === '2') location.hash = `#add/${id}`;
-  else if (choice === '3') {
-    const newName = prompt('New name', name);
-    if (newName?.trim()) {
-      await api(`/decks/${id}`, { method: 'PATCH', body: JSON.stringify({ name: newName }) });
-      render();
+async function viewDeckSettings(deckId) {
+  $app.innerHTML = `${topbar('Deck settings')}<p class="notice" style="text-align:center">Loading…</p>`;
+  const { decks } = await api(`/decks?dayStart=${dayStart()}`);
+  const deck = decks.find((d) => String(d.id) === String(deckId));
+  if (!deck) { location.hash = '#decks'; return; }
+
+  const langSelect = (id, selected) => `<select id="${id}">
+    ${LANGS.map(([code, label]) =>
+      `<option value="${code}"${code === (selected || '') ? ' selected' : ''}>${label}</option>`).join('')}
+  </select>`;
+
+  $app.innerHTML = `
+    ${topbar('Deck settings')}
+    <div class="form">
+      <label>Name</label><input id="name" value="${esc(deck.name)}">
+      <label>Front language (speech)</label>${langSelect('fl', deck.front_lang)}
+      <label>Back language (speech)</label>${langSelect('bl', deck.back_lang)}
+      <div class="actions"><button class="primary" id="save">Save</button></div>
+      <div class="actions">
+        <button onclick="location.hash='#browse/${deck.id}'">Browse cards</button>
+        <button onclick="location.hash='#add/${deck.id}'">Add card</button>
+      </div>
+      <div class="actions"><button id="del" style="color:var(--again)">Delete deck</button></div>
+      <div id="err" class="error"></div>
+    </div>`;
+
+  document.getElementById('save').onclick = async () => {
+    try {
+      await api(`/decks/${deck.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          name: document.getElementById('name').value,
+          front_lang: document.getElementById('fl').value,
+          back_lang: document.getElementById('bl').value,
+        }),
+      });
+      location.hash = '#decks';
+    } catch (err) {
+      document.getElementById('err').textContent = err.message;
     }
-  } else if (choice === '4') {
-    if (confirm(`Delete "${name}" and all its cards? This cannot be undone.`)) {
-      await api(`/decks/${id}`, { method: 'DELETE' });
-      render();
-    }
-  }
+  };
+  document.getElementById('del').onclick = async () => {
+    if (!confirm(`Delete "${deck.name}" and all its cards? This cannot be undone.`)) return;
+    await api(`/decks/${deck.id}`, { method: 'DELETE' });
+    location.hash = '#decks';
+  };
 }
 
 // ---------- study ----------
@@ -197,7 +268,8 @@ async function viewStudy(deckId) {
     api(`/decks?dayStart=${dayStart()}`),
     api(`/decks/${deckId}/study?dayStart=${dayStart()}&newLimit=${newLimit()}`),
   ]);
-  const deckName = decks.find((d) => String(d.id) === String(deckId))?.name || 'Study';
+  const deck = decks.find((d) => String(d.id) === String(deckId)) || {};
+  const deckName = deck.name || 'Study';
 
   const queue = cards;
   let reviewed = 0;
@@ -236,8 +308,9 @@ async function viewStudy(deckId) {
       <div class="study">
         <div class="card-area${showingBack ? '' : ' clickable'}" id="card">
           <div class="card-front">${current.front}</div>
-          ${showingBack ? `<hr class="divider"><div class="card-back">${current.back}</div>` : ''}
-          <button class="speak" id="speak" title="Pronounce">🔊</button>
+          ${deck.front_lang ? `<button class="speak" id="speak-f" title="Pronounce">🔊</button>` : ''}
+          ${showingBack ? `<hr class="divider"><div class="card-back">${current.back}</div>
+            ${deck.back_lang ? `<button class="speak" id="speak-b" title="Pronounce">🔊</button>` : ''}` : ''}
         </div>
         ${showingBack
           ? `<div class="ratings">
@@ -249,7 +322,10 @@ async function viewStudy(deckId) {
           : `<button class="show-btn primary" id="show">Show answer</button>`}
       </div>`;
 
-    document.getElementById('speak').onclick = (e) => { e.stopPropagation(); speak(current.front); };
+    const speakF = document.getElementById('speak-f');
+    if (speakF) speakF.onclick = (e) => { e.stopPropagation(); speak(current.front, deck.front_lang); };
+    const speakB = document.getElementById('speak-b');
+    if (speakB) speakB.onclick = (e) => { e.stopPropagation(); speak(current.back, deck.back_lang); };
     if (showingBack) {
       $app.querySelectorAll('.ratings button').forEach((b) => { b.onclick = () => rate(Number(b.dataset.r)); });
     } else {
