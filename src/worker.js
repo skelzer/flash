@@ -126,8 +126,10 @@ app.post('/api/import', async (c) => {
     let row = await c.env.DB.prepare('SELECT id FROM decks WHERE name = ?').bind(deck.name.trim()).first();
     let deckId = row?.id;
     if (!deckId) {
-      const res = await c.env.DB.prepare('INSERT INTO decks (name, created_at) VALUES (?, ?)')
-        .bind(deck.name.trim(), now).run();
+      // languages chosen in the import UI; existing decks keep their own settings
+      const res = await c.env.DB.prepare(
+        'INSERT INTO decks (name, created_at, front_lang, back_lang) VALUES (?, ?, ?, ?)'
+      ).bind(deck.name.trim(), now, deck.front_lang || 'de-DE', deck.back_lang || '').run();
       deckId = res.meta.last_row_id;
     }
     const { results: existing } = await c.env.DB.prepare('SELECT front FROM cards WHERE deck_id = ?')

@@ -91,6 +91,13 @@ async function speak(html, lang) {
 }
 if ('speechSynthesis' in window) getVoicesAsync(); // warm up voice list
 
+function langSelect(id, selected) {
+  return `<select id="${id}">
+    ${LANGS.map(([code, label]) =>
+      `<option value="${code}"${code === (selected || '') ? ' selected' : ''}>${label}</option>`).join('')}
+  </select>`;
+}
+
 function topbar(title, { back = '#decks', right = '' } = {}) {
   return `<div class="topbar">
     ${back ? `<button class="iconbtn" onclick="location.hash='${back}'">←</button>` : ''}
@@ -217,11 +224,6 @@ async function viewDeckSettings(deckId) {
   const { decks } = await api(`/decks?dayStart=${dayStart()}`);
   const deck = decks.find((d) => String(d.id) === String(deckId));
   if (!deck) { location.hash = '#decks'; return; }
-
-  const langSelect = (id, selected) => `<select id="${id}">
-    ${LANGS.map(([code, label]) =>
-      `<option value="${code}"${code === (selected || '') ? ' selected' : ''}>${label}</option>`).join('')}
-  </select>`;
 
   $app.innerHTML = `
     ${topbar('Deck settings')}
@@ -502,9 +504,15 @@ async function viewImport() {
             <span class="name">${esc(d.name)}</span>
             <span class="pill">${d.cards.length}</span>
           </div>`).join('')}
+        <div class="form" style="margin-bottom:10px">
+          <label>Front language (speech)</label>${langSelect('imp-fl', 'en-US')}
+          <label>Back language (speech)</label>${langSelect('imp-bl', 'de-DE')}
+        </div>
         <div class="actions"><button class="primary" id="doimport">Import selected</button></div>
         <div id="prog"></div>`;
       document.getElementById('doimport').onclick = async () => {
+        const frontLang = document.getElementById('imp-fl').value;
+        const backLang = document.getElementById('imp-bl').value;
         const chosen = decks.filter((_, i) => document.getElementById(`dk${i}`).checked);
         const totalCards = chosen.reduce((n, d) => n + d.cards.length, 0);
         const prog = document.getElementById('prog');
@@ -515,7 +523,7 @@ async function viewImport() {
             const chunk = deck.cards.slice(i, i + 500);
             const res = await api('/import', {
               method: 'POST',
-              body: JSON.stringify({ decks: [{ name: deck.name, cards: chunk }] }),
+              body: JSON.stringify({ decks: [{ name: deck.name, front_lang: frontLang, back_lang: backLang, cards: chunk }] }),
             });
             imported += res.imported;
             skipped += res.skipped;
