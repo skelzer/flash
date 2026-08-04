@@ -1,0 +1,24 @@
+{
+  "name": "flash",
+  "version": "1.0.0",
+  "description": "Personal Anki-style spaced repetition app for German flashcards",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "dev": "npm run build && wrangler dev",
+    "deploy": "npm run build && wrangler deploy",
+    "db:migrate:local": "wrangler d1 migrations apply flash-db --local",
+    "db:migrate:remote": "wrangler d1 migrations apply flash-db --remote"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.1",
+    "wrangler": "^4.118.0"
+  },
+  "dependencies": {
+    "fzstd": "^0.1.1",
+    "hono": "^4.13.0",
+    "jszip": "^3.10.1",
+    "sql.js": "^1.14.1"
+  }
+}

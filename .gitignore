@@ -1,0 +1,6 @@
+node_modules/
+.wrangler/
+.dev.vars
+public/importer.js
+public/sql-wasm-browser.wasm
+public/test.apkg
