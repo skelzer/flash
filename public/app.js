@@ -26,7 +26,7 @@ async function api(path, opts = {}) {
       ...opts.headers,
     },
   });
-  if (res.status === 401) {
+  if (res.status === 401 && path !== '/login' && path !== '/register') {
     localStorage.removeItem('token');
     location.hash = '#login';
     throw new Error('unauthorized');
@@ -137,30 +137,51 @@ window.addEventListener('hashchange', render);
 // ---------- login ----------
 
 function viewLogin() {
-  $app.innerHTML = `
-    <div class="login">
-      <div class="logo">🃏</div>
-      <h1>Flash</h1>
-      <p class="notice">Enter your passphrase to unlock</p>
-      <input id="pass" type="password" placeholder="Passphrase" autocomplete="current-password">
-      <div id="err" class="error"></div>
-      <button class="primary show-btn" id="go">Unlock</button>
-    </div>`;
-  const submit = async () => {
-    try {
-      const { token } = await api('/login', {
-        method: 'POST',
-        body: JSON.stringify({ passphrase: document.getElementById('pass').value }),
-      });
-      localStorage.setItem('token', token);
-      location.hash = '#decks';
-    } catch (err) {
-      document.getElementById('err').textContent = err.message;
-    }
+  let mode = 'login';
+  const draw = () => {
+    const registering = mode === 'register';
+    $app.innerHTML = `
+      <div class="login">
+        <div class="logo">🃏</div>
+        <h1>Flash</h1>
+        <p class="notice">${registering ? 'Create your account' : 'Sign in to study'}</p>
+        <input id="user" placeholder="Username" autocomplete="username" autocapitalize="none">
+        <input id="pass" type="password" placeholder="Password"
+          autocomplete="${registering ? 'new-password' : 'current-password'}">
+        ${registering ? `<input id="invite" placeholder="Invite code">` : ''}
+        <div id="err" class="error"></div>
+        <button class="primary show-btn" id="go">${registering ? 'Create account' : 'Sign in'}</button>
+        <button id="switch" style="background:none;color:var(--accent);font-weight:600">
+          ${registering ? 'I already have an account' : 'New here? Create an account'}
+        </button>
+      </div>`;
+
+    const submit = async () => {
+      try {
+        const body = {
+          username: document.getElementById('user').value.trim(),
+          password: document.getElementById('pass').value,
+        };
+        if (registering) body.invite = document.getElementById('invite').value.trim();
+        const { token, username } = await api(registering ? '/register' : '/login', {
+          method: 'POST',
+          body: JSON.stringify(body),
+        });
+        localStorage.setItem('token', token);
+        localStorage.setItem('username', username);
+        location.hash = '#decks';
+      } catch (err) {
+        document.getElementById('err').textContent = err.message;
+      }
+    };
+    document.getElementById('go').onclick = submit;
+    document.getElementById('switch').onclick = () => { mode = registering ? 'login' : 'register'; draw(); };
+    $app.querySelectorAll('input').forEach((el) => {
+      el.onkeydown = (e) => { if (e.key === 'Enter') submit(); };
+    });
+    document.getElementById('user').focus();
   };
-  document.getElementById('go').onclick = submit;
-  document.getElementById('pass').onkeydown = (e) => { if (e.key === 'Enter') submit(); };
-  document.getElementById('pass').focus();
+  draw();
 }
 
 // ---------- decks ----------
@@ -194,7 +215,9 @@ async function viewDecks() {
       <button id="import-btn2">Import .apkg</button>
     </div>
     <p class="statline">${stats.reviewsToday} reviews today · ${stats.reviewsWeek} this week · ${stats.totalCards} cards ·
-      new/day <input id="nl" type="number" min="0" max="200" value="${newLimit()}" style="width:58px;padding:2px 6px;display:inline-block"></p>`;
+      new/day <input id="nl" type="number" min="0" max="200" value="${newLimit()}" style="width:58px;padding:2px 6px;display:inline-block"></p>
+    <p class="statline">${esc(localStorage.getItem('username') || '')} ·
+      <button id="signout" style="background:none;color:var(--muted);text-decoration:underline;font-size:13.5px;padding:0">Sign out</button></p>`;
 
   $app.querySelectorAll('.deck-row').forEach((el) => {
     el.onclick = (e) => {
@@ -220,6 +243,12 @@ async function viewDecks() {
   document.getElementById('nl').onchange = (e) => {
     localStorage.setItem('newLimit', e.target.value);
     render();
+  };
+  document.getElementById('signout').onclick = async () => {
+    try { await api('/logout', { method: 'POST' }); } catch { /* session may already be gone */ }
+    localStorage.removeItem('token');
+    localStorage.removeItem('username');
+    location.hash = '#login';
   };
 }
 
@@ -609,6 +638,25 @@ const DE_STOPWORDS = new Set([
   'Es', 'Man', 'Hier', 'Da', 'Dort', 'Heute', 'Morgen', 'Gestern', 'Sehr', 'So', 'Nur', 'Schon',
 ]);
 
+// Articles/determiners that reveal gender when they directly precede the noun.
+// Ambiguous ones (ein, dem, einem, ...) are recognized for stripping but cast no vote.
+const ARTICLE_GENDER = {
+  der: 'm', den: 'm', einen: 'm', diesen: 'm', jeden: 'm',
+  die: 'f', eine: 'f', einer: 'f', keine: 'f', diese: 'f', jede: 'f', zur: 'f',
+  das: 'n', dieses: 'n', jedes: 'n',
+};
+const ARTICLE_AMBIGUOUS = new Set(['ein', 'dem', 'des', 'einem', 'eines', 'keinen', 'zum', 'vom', 'beim', 'im', 'ins', 'ans', 'meine', 'seinen', 'ihre', 'ihren']);
+
+// Reliable German gender suffixes, used only when no article votes exist
+function suffixGender(noun) {
+  if (/(ung|heit|keit|schaft|ion|tät|enz|ei|ik|ur)$/.test(noun)) return 'f';
+  if (/(chen|lein|ment|um)$/.test(noun)) return 'n';
+  if (/(ling|ismus|ant|ist|or)$/.test(noun)) return 'm';
+  return null;
+}
+
+const GENDER_META = { m: { article: 'der', color: 'var(--g-m)' }, f: { article: 'die', color: 'var(--g-f)' }, n: { article: 'das', color: 'var(--g-n)' } };
+
 // Map each noun to a base form that also occurs in the deck (Ziele -> Ziel,
 // Entscheidungen -> Entscheidung, Häuser -> Haus). Merging only happens when the
 // base form is itself present, which keeps false merges out.
@@ -641,8 +689,22 @@ function buildNexuses(cards, germanSide, otherSide) {
     const nouns = new Set(tokens.filter((t) => /^[A-ZÄÖÜ]/.test(t) && t.length > 2 && !DE_STOPWORDS.has(t)));
     for (const noun of nouns) {
       if (!byNoun.has(noun)) byNoun.set(noun, []);
-      // keep the variant actually used in this phrase so the map can elide it
-      byNoun.get(noun).push({ id: card.id, phrase: german, other, variant: noun });
+      // capture the word right before the noun: strip it if it's an article,
+      // and remember it as a gender clue
+      const m = german.match(new RegExp(`(?:\\b([A-Za-zÄÖÜäöüß]+)\\s+)?${noun}(?=$|[^A-Za-zÄÖÜäöüß])`));
+      const prev = (m?.[1] || '').toLowerCase();
+      const isArticle = prev in ARTICLE_GENDER || ARTICLE_AMBIGUOUS.has(prev);
+      // drop the article+noun entirely at the start of the phrase ("eine
+      // Entscheidung treffen" -> "treffen"); mid-phrase keep a placeholder so
+      // the grammar stays readable ("sich an den Plan halten" -> "sich an ~ halten")
+      const keepPrefix = isArticle ? '' : (m[1] ? m[1] + ' ' : '');
+      const atStart = m.index === 0 && (!m[1] || isArticle);
+      const short = german.replace(m[0], atStart ? keepPrefix : `${keepPrefix}~`)
+        .replace(/\s+/g, ' ').trim() || '~';
+      byNoun.get(noun).push({
+        id: card.id, phrase: german, other, variant: noun, short,
+        articleWord: isArticle ? prev : null,
+      });
     }
   }
 
@@ -658,26 +720,45 @@ function buildNexuses(cards, germanSide, otherSide) {
   return [...merged.entries()]
     .map(([noun, items]) => {
       const seen = new Set();
-      return { noun, items: items.filter((it) => !seen.has(it.id) && seen.add(it.id)) };
+      const unique = items.filter((it) => !seen.has(it.id) && seen.add(it.id));
+      // majority vote over article clues; "die" only counts on the singular form
+      // (before a plural it says nothing about gender)
+      const votes = { m: 0, f: 0, n: 0 };
+      for (const it of unique) {
+        const w = it.articleWord;
+        if (!w || !(w in ARTICLE_GENDER)) continue;
+        if (w === 'die' && it.variant !== noun) continue;
+        votes[ARTICLE_GENDER[w]]++;
+      }
+      const best = Object.entries(votes).sort((a, b) => b[1] - a[1]);
+      let gender = best[0][1] > 0 && best[0][1] > best[1][1] ? best[0][0] : null;
+      if (!gender) gender = suffixGender(noun);
+      return { noun, gender, items: unique };
     })
     .filter(({ items }) => items.length >= 2)
     .sort((a, b) => b.items.length - a.items.length || a.noun.localeCompare(b.noun));
 }
 
-function renderRadial(container, noun, items) {
+function renderRadial(container, noun, items, gender) {
   const MAX_LEAVES = 18;
   const leaves = items.slice(0, MAX_LEAVES);
   const n = leaves.length;
   const height = Math.max(320, Math.min(600, 200 + n * 28));
+  const meta = GENDER_META[gender];
+  const nexusLabel = meta ? `${meta.article} ${noun}` : noun;
   container.innerHTML = `<div class="mindmap" style="height:${height}px">
     <svg class="mmlines"></svg>
-    <div class="mmleaf mmnexus">${esc(noun)}</div>
-    ${leaves.map((it, i) => {
-      const short = it.phrase.replace(new RegExp(`(^|[^A-Za-zÄÖÜäöüß])${it.variant || noun}(?=$|[^A-Za-zÄÖÜäöüß])`), '$1~');
-      return `<div class="mmleaf" data-i="${i}" data-de="${esc(short)}" data-en="${esc(it.other)}">${esc(short)}</div>`;
-    }).join('')}
+    <div class="mmleaf mmnexus"${meta ? ` style="background:${meta.color}"` : ''}>${esc(nexusLabel)}</div>
+    ${leaves.map((it, i) =>
+      `<div class="mmleaf" data-i="${i}" data-de="${esc(it.short)}" data-en="${esc(it.other)}">${esc(it.short)}</div>`
+    ).join('')}
   </div>
   ${items.length > n ? `<p class="notice" style="text-align:center">+${items.length - n} more not shown</p>` : ''}
+  <div class="chips" style="justify-content:center;margin-top:8px">
+    <span class="chip"><span class="dot" style="background:var(--g-m)"></span>der</span>
+    <span class="chip"><span class="dot" style="background:var(--g-f)"></span>die</span>
+    <span class="chip"><span class="dot" style="background:var(--g-n)"></span>das</span>
+  </div>
   <p class="notice" style="text-align:center">Tap a phrase to see its translation.</p>`;
 
   const map = container.querySelector('.mindmap');
@@ -733,14 +814,18 @@ async function viewMap(deckId) {
   $app.innerHTML = `
     ${topbar(`Collocations · ${deck.name || ''}`, { back: `#deckset/${esc(deckId)}` })}
     <div class="chips" id="nexus-chips" style="margin-bottom:12px">
-      ${nexuses.map((x, i) => `<button class="nexus-chip" data-i="${i}">${esc(x.noun)} <b>${x.items.length}</b></button>`).join('')}
+      ${nexuses.map((x, i) => {
+        const meta = GENDER_META[x.gender];
+        return `<button class="nexus-chip" data-i="${i}">
+          ${meta ? `<span class="dot" style="background:${meta.color}"></span>` : ''}${esc(x.noun)} <b>${x.items.length}</b></button>`;
+      }).join('')}
     </div>
     <div id="mapbox"></div>`;
 
   const chips = $app.querySelectorAll('.nexus-chip');
   const select = (i) => {
     chips.forEach((ch) => ch.classList.toggle('active', Number(ch.dataset.i) === i));
-    renderRadial(document.getElementById('mapbox'), nexuses[i].noun, nexuses[i].items);
+    renderRadial(document.getElementById('mapbox'), nexuses[i].noun, nexuses[i].items, nexuses[i].gender);
   };
   chips.forEach((ch) => { ch.onclick = () => select(Number(ch.dataset.i)); });
   select(0);

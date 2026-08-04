@@ -10,6 +10,10 @@
   --hard: #d97706;
   --good: #16a34a;
   --easy: #2563eb;
+  /* German genders: der / die / das */
+  --g-m: #2563eb;
+  --g-f: #db2777;
+  --g-n: #16a34a;
   --radius: 14px;
 }
 @media (prefers-color-scheme: dark) {
@@ -306,6 +310,9 @@ progress { width: 100%; accent-color: var(--accent); }
   border-radius: 99px;
   font-size: 14px;
   font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
 }
 .nexus-chip b { color: var(--accent); margin-left: 3px; }
 .nexus-chip.active { background: var(--accent); color: #fff; border-color: transparent; }
