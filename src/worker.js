@@ -4,6 +4,12 @@ import { schedule, predictions } from './scheduler.js';
 const app = new Hono();
 const DAY = 86_400_000;
 const SESSION_DAYS = 180;
+// upload sanity limits — protect the shared free-tier D1 daily budget from one
+// runaway import; not announced in the UI, only enforced
+const MAX_IMPORT_CARDS = 1000;    // per import request
+const MAX_FIELD_LEN = 10_000;     // chars per card field
+const MAX_CARDS_PER_USER = 50_000;
+const TOO_MUCH = "Whoa, that's too much.";
 // PBKDF2 iterations sized for the Workers free plan's 10ms CPU budget;
 // raise if the account ever moves to the paid plan.
 const PBKDF2_ITERATIONS = 25_000;
@@ -102,6 +108,15 @@ async function ownDeck(c, deckId) {
     .bind(deckId, c.get('uid')).first();
 }
 
+async function userCardCount(c) {
+  const row = await c.env.DB.prepare(
+    'SELECT COUNT(*) AS n FROM cards ca JOIN decks d ON d.id = ca.deck_id WHERE d.user_id = ?'
+  ).bind(c.get('uid')).first();
+  return row?.n || 0;
+}
+
+const fieldTooLong = (...fields) => fields.some((f) => (f || '').length > MAX_FIELD_LEN);
+
 // card ownership guard via its deck
 async function ownCard(c, cardId) {
   return c.env.DB.prepare(
@@ -190,6 +205,8 @@ app.post('/api/decks/:id/cards', async (c) => {
   if (!deck) return c.json({ error: 'Deck not found' }, 404);
   const { front, back, tags = '' } = await c.req.json();
   if (!front?.trim() || !back?.trim()) return c.json({ error: 'Front and back required' }, 400);
+  if (fieldTooLong(front, back, tags)) return c.json({ error: TOO_MUCH }, 413);
+  if ((await userCardCount(c)) >= MAX_CARDS_PER_USER) return c.json({ error: TOO_MUCH }, 413);
   const res = await c.env.DB.prepare(
     'INSERT INTO cards (deck_id, front, back, tags, created_at) VALUES (?, ?, ?, ?, ?)'
   ).bind(deck.id, front.trim(), back.trim(), tags.trim(), Date.now()).run();
@@ -200,6 +217,7 @@ app.patch('/api/cards/:id', async (c) => {
   const card = await ownCard(c, c.req.param('id'));
   if (!card) return c.json({ error: 'Card not found' }, 404);
   const { front, back, tags = '' } = await c.req.json();
+  if (fieldTooLong(front, back, tags)) return c.json({ error: TOO_MUCH }, 413);
   await c.env.DB.prepare('UPDATE cards SET front = ?, back = ?, tags = ? WHERE id = ?')
     .bind(front.trim(), back.trim(), tags.trim(), card.id).run();
   return c.json({ ok: true });
@@ -223,6 +241,9 @@ app.post('/api/import', async (c) => {
   const { decks } = await c.req.json();
   const uid = c.get('uid');
   const now = Date.now();
+  const incoming = (decks || []).reduce((n, d) => n + (d.cards?.length || 0), 0);
+  if (incoming > MAX_IMPORT_CARDS) return c.json({ error: TOO_MUCH }, 413);
+  if ((await userCardCount(c)) + incoming > MAX_CARDS_PER_USER) return c.json({ error: TOO_MUCH }, 413);
   let imported = 0, skipped = 0;
   for (const deck of decks || []) {
     if (!deck.name?.trim() || !deck.cards?.length) continue;
@@ -245,7 +266,7 @@ app.post('/api/import', async (c) => {
     for (const card of deck.cards) {
       const front = (card.front || '').trim();
       const back = (card.back || '').trim();
-      if (!front || !back || seen.has(front)) { skipped++; continue; }
+      if (!front || !back || seen.has(front) || fieldTooLong(front, back, card.tags)) { skipped++; continue; }
       seen.add(front);
       batch.push(stmt.bind(deckId, front, back, (card.tags || '').trim(), now));
     }
