@@ -116,6 +116,7 @@ const routes = {
   import: viewImport,
   deckset: viewDeckSettings,
   stats: viewStats,
+  map: viewMap,
 };
 
 async function render() {
@@ -239,6 +240,7 @@ async function viewDeckSettings(deckId) {
         <button onclick="location.hash='#browse/${deck.id}'">Browse cards</button>
         <button onclick="location.hash='#add/${deck.id}'">Add card</button>
       </div>
+      <div class="actions"><button onclick="location.hash='#map/${deck.id}'">🕸 Collocation map</button></div>
       <div class="actions"><button id="del" style="color:var(--again)">Delete deck</button></div>
       <div id="err" class="error"></div>
     </div>`;
@@ -592,6 +594,156 @@ async function viewStats() {
   };
   attachBarTips($app, [s.perDay, s.forecast], (w, i, v) =>
     w === 0 ? `${dayName(i - 29)} · ${v} reviews` : `${dayName(i)} · ${v} due`);
+}
+
+// ---------- collocation map ----------
+
+// Capitalized German words that are not nouns (articles, pronouns, sentence starters)
+const DE_STOPWORDS = new Set([
+  'Der', 'Die', 'Das', 'Den', 'Dem', 'Des', 'Ein', 'Eine', 'Einen', 'Einem', 'Einer', 'Eines',
+  'Ich', 'Du', 'Er', 'Sie', 'Es', 'Wir', 'Ihr', 'Man', 'Sich', 'Mein', 'Dein', 'Sein', 'Ihre', 'Ihren',
+  'Als', 'Wie', 'Wo', 'Was', 'Wer', 'Wenn', 'Dass', 'Ob', 'Und', 'Oder', 'Aber', 'Auch', 'Noch',
+  'Nicht', 'Kein', 'Keine', 'Keinen', 'Etwas', 'Alles', 'Nichts', 'Jemand', 'Jemanden', 'Jemandem',
+  'Zu', 'Im', 'In', 'Am', 'An', 'Auf', 'Aus', 'Bei', 'Mit', 'Nach', 'Von', 'Vor', 'Für', 'Um',
+  'Über', 'Unter', 'Durch', 'Gegen', 'Ohne', 'Bis', 'Beim', 'Zum', 'Zur', 'Vom', 'Ins', 'Ans',
+  'Es', 'Man', 'Hier', 'Da', 'Dort', 'Heute', 'Morgen', 'Gestern', 'Sehr', 'So', 'Nur', 'Schon',
+]);
+
+// Map each noun to a base form that also occurs in the deck (Ziele -> Ziel,
+// Entscheidungen -> Entscheidung, Häuser -> Haus). Merging only happens when the
+// base form is itself present, which keeps false merges out.
+function canonicalNoun(word, allNouns) {
+  const deUmlaut = (s) => s.replace(/ä/g, 'a').replace(/ö/g, 'o').replace(/ü/g, 'u')
+    .replace(/Ä/g, 'A').replace(/Ö/g, 'O').replace(/Ü/g, 'U');
+  let current = word;
+  for (let hop = 0; hop < 3; hop++) {  // resolve chains like Entscheidungen -> Entscheidung
+    let next = null;
+    for (const suf of ['nen', 'en', 'er', 'e', 'n', 's']) {
+      if (current.length - suf.length < 3 || !current.endsWith(suf)) continue;
+      const stem = current.slice(0, -suf.length);
+      if (allNouns.has(stem)) { next = stem; break; }
+      if ((suf === 'er' || suf === 'e') && allNouns.has(deUmlaut(stem))) { next = deUmlaut(stem); break; }
+    }
+    if (!next || next === current) break;
+    current = next;
+  }
+  return current;
+}
+
+// Group cards by shared capitalized German nouns. Returns [{noun, items}] sorted by size.
+function buildNexuses(cards, germanSide, otherSide) {
+  const byNoun = new Map();
+  for (const card of cards) {
+    const german = stripHtml(card[germanSide]).trim();
+    const other = stripHtml(card[otherSide]).trim();
+    if (!german) continue;
+    const tokens = german.match(/[A-Za-zÄÖÜäöüß]+/g) || [];
+    const nouns = new Set(tokens.filter((t) => /^[A-ZÄÖÜ]/.test(t) && t.length > 2 && !DE_STOPWORDS.has(t)));
+    for (const noun of nouns) {
+      if (!byNoun.has(noun)) byNoun.set(noun, []);
+      // keep the variant actually used in this phrase so the map can elide it
+      byNoun.get(noun).push({ id: card.id, phrase: german, other, variant: noun });
+    }
+  }
+
+  // fold plural/inflected forms into their base noun when the base occurs too
+  const allNouns = new Set(byNoun.keys());
+  const merged = new Map();
+  for (const [noun, items] of byNoun) {
+    const base = canonicalNoun(noun, allNouns);
+    if (!merged.has(base)) merged.set(base, []);
+    merged.get(base).push(...items);
+  }
+
+  return [...merged.entries()]
+    .map(([noun, items]) => {
+      const seen = new Set();
+      return { noun, items: items.filter((it) => !seen.has(it.id) && seen.add(it.id)) };
+    })
+    .filter(({ items }) => items.length >= 2)
+    .sort((a, b) => b.items.length - a.items.length || a.noun.localeCompare(b.noun));
+}
+
+function renderRadial(container, noun, items) {
+  const MAX_LEAVES = 18;
+  const leaves = items.slice(0, MAX_LEAVES);
+  const n = leaves.length;
+  const height = Math.max(320, Math.min(600, 200 + n * 28));
+  container.innerHTML = `<div class="mindmap" style="height:${height}px">
+    <svg class="mmlines"></svg>
+    <div class="mmleaf mmnexus">${esc(noun)}</div>
+    ${leaves.map((it, i) => {
+      const short = it.phrase.replace(new RegExp(`(^|[^A-Za-zÄÖÜäöüß])${it.variant || noun}(?=$|[^A-Za-zÄÖÜäöüß])`), '$1~');
+      return `<div class="mmleaf" data-i="${i}" data-de="${esc(short)}" data-en="${esc(it.other)}">${esc(short)}</div>`;
+    }).join('')}
+  </div>
+  ${items.length > n ? `<p class="notice" style="text-align:center">+${items.length - n} more not shown</p>` : ''}
+  <p class="notice" style="text-align:center">Tap a phrase to see its translation.</p>`;
+
+  const map = container.querySelector('.mindmap');
+  const svg = container.querySelector('.mmlines');
+  const layout = () => {
+    const w = map.clientWidth, h = map.clientHeight;
+    const cx = w / 2, cy = h / 2;
+    const rx = Math.min(w / 2 - 78, 90 + n * 6);
+    const ry = Math.min(h / 2 - 34, 70 + n * 12);
+    svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
+    let lines = '';
+    map.querySelectorAll('.mmleaf:not(.mmnexus)').forEach((el) => {
+      const i = Number(el.dataset.i);
+      const a = -Math.PI / 2 + (i * 2 * Math.PI) / n;
+      const x = cx + rx * Math.cos(a);
+      const y = cy + ry * Math.sin(a);
+      el.style.left = `${x}px`;
+      el.style.top = `${y}px`;
+      lines += `<line x1="${cx}" y1="${cy}" x2="${x}" y2="${y}"/>`;
+    });
+    svg.innerHTML = lines;
+  };
+  layout();
+
+  map.addEventListener('click', (e) => {
+    const leaf = e.target.closest('.mmleaf:not(.mmnexus)');
+    if (!leaf) return;
+    const flipped = leaf.classList.toggle('flipped');
+    leaf.textContent = flipped ? (leaf.dataset.en || '—') : leaf.dataset.de;
+  });
+}
+
+async function viewMap(deckId) {
+  $app.innerHTML = `${topbar('Collocations', { back: `#deckset/${esc(deckId)}` })}<p class="notice" style="text-align:center">Loading…</p>`;
+  const [{ decks }, { cards }] = await Promise.all([
+    api(`/decks?dayStart=${dayStart()}`),
+    api(`/decks/${deckId}/allcards`),
+  ]);
+  const deck = decks.find((d) => String(d.id) === String(deckId)) || {};
+  const germanSide = (deck.front_lang || '').startsWith('de') ? 'front' : 'back';
+  const otherSide = germanSide === 'front' ? 'back' : 'front';
+  const nexuses = buildNexuses(cards, germanSide, otherSide);
+
+  if (!nexuses.length) {
+    $app.innerHTML = `${topbar('Collocations', { back: `#deckset/${esc(deckId)}` })}
+      <p class="notice" style="text-align:center;margin-top:60px">
+        No shared nouns found in this deck yet.<br>
+        The map appears once several cards use the same noun<br>(e.g. „eine Entscheidung treffen“ / „eine Entscheidung umsetzen“).
+      </p>`;
+    return;
+  }
+
+  $app.innerHTML = `
+    ${topbar(`Collocations · ${deck.name || ''}`, { back: `#deckset/${esc(deckId)}` })}
+    <div class="chips" id="nexus-chips" style="margin-bottom:12px">
+      ${nexuses.map((x, i) => `<button class="nexus-chip" data-i="${i}">${esc(x.noun)} <b>${x.items.length}</b></button>`).join('')}
+    </div>
+    <div id="mapbox"></div>`;
+
+  const chips = $app.querySelectorAll('.nexus-chip');
+  const select = (i) => {
+    chips.forEach((ch) => ch.classList.toggle('active', Number(ch.dataset.i) === i));
+    renderRadial(document.getElementById('mapbox'), nexuses[i].noun, nexuses[i].items);
+  };
+  chips.forEach((ch) => { ch.onclick = () => select(Number(ch.dataset.i)); });
+  select(0);
 }
 
 // ---------- import ----------

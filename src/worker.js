@@ -88,6 +88,14 @@ app.get('/api/decks/:id/cards', async (c) => {
   return c.json({ cards: results });
 });
 
+// full card list for the collocation map (no pagination, light columns)
+app.get('/api/decks/:id/allcards', async (c) => {
+  const { results } = await c.env.DB.prepare(
+    'SELECT id, front, back FROM cards WHERE deck_id = ? ORDER BY id'
+  ).bind(c.req.param('id')).all();
+  return c.json({ cards: results });
+});
+
 app.post('/api/decks/:id/cards', async (c) => {
   const { front, back, tags = '' } = await c.req.json();
   if (!front?.trim() || !back?.trim()) return c.json({ error: 'Front and back required' }, 400);

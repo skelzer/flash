@@ -15,11 +15,17 @@ import { decompress } from 'fzstd';
 const FIELD_SEP = '\x1f';
 
 function cleanField(html) {
-  return html
+  let out = html
     .replace(/\[sound:[^\]]*\]/g, '')      // audio refs (media not imported)
     .replace(/<img[^>]*>/gi, '')           // images (media not imported)
-    .replace(/\{\{c(\d+)::(.*?)(::.*?)?\}\}/g, '[$2]') // flatten cloze markers
-    .trim();
+    .replace(/\{\{c(\d+)::(.*?)(::.*?)?\}\}/g, '[$2]'); // flatten cloze markers
+  // strip the empty <div> nesting Anki's editor leaves behind
+  let prev;
+  do { prev = out; out = out.replace(/<div>\s*<\/div>/gi, ''); } while (out !== prev);
+  // unwrap if the whole field is a single <div> wrapper
+  const m = out.trim().match(/^<div>([\s\S]*)<\/div>$/i);
+  if (m && !m[1].includes('<div')) out = m[1];
+  return out.trim();
 }
 
 export async function parseApkg(file) {
