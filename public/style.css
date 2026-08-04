@@ -31,6 +31,13 @@ body {
   color: var(--text);
   font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   -webkit-tap-highlight-color: transparent;
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: default;
+}
+input, textarea {
+  user-select: text;
+  -webkit-user-select: text;
 }
 #app {
   max-width: 560px;
@@ -96,6 +103,20 @@ textarea { resize: vertical; min-height: 72px; }
   color: var(--accent);
 }
 
+/* study header counters */
+.pill-learn, .pill-due, .pill-new {
+  font-size: 13.5px;
+  font-weight: 700;
+  min-width: 30px;
+  text-align: center;
+  padding: 4px 8px;
+  border-radius: 9px;
+}
+.pill-learn { color: var(--again); background: color-mix(in srgb, var(--again) 14%, transparent); }
+.pill-due  { color: var(--good); background: color-mix(in srgb, var(--good) 14%, transparent); }
+.pill-new  { color: var(--easy); background: color-mix(in srgb, var(--easy) 14%, transparent); }
+.pill-learn.empty, .pill-due.empty, .pill-new.empty { color: var(--muted); background: transparent; opacity: 0.5; }
+
 /* deck list */
 .deck-row {
   display: flex;
@@ -109,7 +130,7 @@ textarea { resize: vertical; min-height: 72px; }
   box-shadow: 0 1px 2px rgb(0 0 0 / 4%);
 }
 .deck-row .name { flex: 1; font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
-.deck-row .counts { display: flex; gap: 7px; font-size: 13px; font-weight: 700; }
+.deck-row .counts { display: flex; gap: 10px; font-size: 15px; font-weight: 700; }
 .count-new { color: var(--easy); }
 .count-due { color: var(--good); }
 .count-zero { color: var(--muted); font-weight: 500; }
@@ -143,9 +164,11 @@ textarea { resize: vertical; min-height: 72px; }
   line-height: 1.45;
   word-break: break-word;
 }
+.card-area.clickable { cursor: pointer; }
 .card-area hr { border: none; border-top: 1px solid var(--border); margin: 18px 10%; }
-.card-back { font-size: 20px; color: var(--text); }
-.divider { border: none; border-top: 2px solid var(--accent-soft); margin: 18px 0; }
+.card-front { font-size: 26px; font-weight: 600; }
+.card-back { font-size: 20px; }
+.divider { border: none; border-top: 1px solid var(--border); margin: 20px 18%; }
 
 .show-btn { padding: 18px; font-size: 17px; font-weight: 700; }
 .ratings { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
@@ -166,11 +189,16 @@ textarea { resize: vertical; min-height: 72px; }
 .r4 { background: var(--easy); }
 
 .speak {
-  margin-top: 14px;
-  font-size: 22px;
-  background: none;
-  border: none;
+  margin: 18px auto 0;
+  font-size: 21px;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  display: grid;
+  place-items: center;
 }
+.speak:active { transform: scale(0.92); }
 
 .done { text-align: center; margin-top: 30vh; }
 .done .big { font-size: 44px; }

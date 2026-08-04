@@ -208,9 +208,9 @@ async function viewStudy(deckId) {
     const learn = queue.filter((x) => x.state === 'learning' || x.state === 'relearning').length;
     const rev = queue.filter((x) => x.state === 'review').length;
     const nw = queue.filter((x) => x.state === 'new').length;
-    return `<span class="pill" style="color:var(--again)">${learn}</span>
-            <span class="pill" style="color:var(--good)">${rev}</span>
-            <span class="pill" style="color:var(--easy)">${nw}</span>`;
+    return `<span class="pill-learn${learn ? '' : ' empty'}">${learn}</span>
+            <span class="pill-due${rev ? '' : ' empty'}">${rev}</span>
+            <span class="pill-new${nw ? '' : ' empty'}">${nw}</span>`;
   };
 
   function next() {
@@ -234,8 +234,8 @@ async function viewStudy(deckId) {
     $app.innerHTML = `
       ${topbar(deckName, { right: counts() })}
       <div class="study">
-        <div class="card-area" id="card">
-          <div>${current.front}</div>
+        <div class="card-area${showingBack ? '' : ' clickable'}" id="card">
+          <div class="card-front">${current.front}</div>
           ${showingBack ? `<hr class="divider"><div class="card-back">${current.back}</div>` : ''}
           <button class="speak" id="speak" title="Pronounce">🔊</button>
         </div>
