@@ -212,7 +212,9 @@ async function viewDecks() {
   $app.innerHTML = `
     ${topbar('Flash', { back: null, right: `<button class="iconbtn" id="stats-btn" title="Statistics">📊</button>
       <button class="iconbtn" id="import-btn" title="Import .apkg">⬆</button>` })}
-    ${decks.length ? rows : '<p class="notice" style="text-align:center;margin-top:60px">No decks yet.<br>Import an .apkg file or create a deck below.</p>'}
+    ${decks.length ? rows : `<p class="notice" style="text-align:center;margin-top:50px">No decks yet.</p>
+      <div class="actions"><button class="primary" id="starter">🇩🇪 Get the starter deck</button></div>
+      <p class="notice" style="text-align:center">German collocations to try the app with —<br>or import your own .apkg below.</p>`}
     <div class="actions">
       <button id="new-deck">＋ New deck</button>
       <button id="import-btn2">Import .apkg</button>
@@ -240,6 +242,17 @@ async function viewDecks() {
     await api('/decks', { method: 'POST', body: JSON.stringify({ name }) });
     render();
   };
+  const starterBtn = document.getElementById('starter');
+  if (starterBtn) {
+    starterBtn.onclick = async () => {
+      try {
+        await api('/starter', { method: 'POST' });
+        render();
+      } catch (err) {
+        toast(err.message);
+      }
+    };
+  }
   document.getElementById('stats-btn').onclick = () => { location.hash = '#stats'; };
   document.getElementById('import-btn').onclick = () => { location.hash = '#import'; };
   document.getElementById('import-btn2').onclick = () => { location.hash = '#import'; };

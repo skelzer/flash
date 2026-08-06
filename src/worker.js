@@ -61,9 +61,12 @@ app.post('/api/register', async (c) => {
   ).bind(username, hash, salt, Date.now()).run();
   const userId = res.meta.last_row_id;
 
-  // the very first account claims all pre-IAM decks
+  // the very first account claims all pre-IAM decks; everyone else starts
+  // with a copy of the starter deck
   if ((before?.n || 0) === 0) {
     await c.env.DB.prepare('UPDATE decks SET user_id = ? WHERE user_id IS NULL').bind(userId).run();
+  } else {
+    await cloneStarterDeck(c.env.DB, userId);
   }
 
   const token = await createSession(c.env.DB, userId);
@@ -101,6 +104,26 @@ app.post('/api/logout', async (c) => {
   await c.env.DB.prepare('DELETE FROM sessions WHERE token = ?').bind(c.get('token')).run();
   return c.json({ ok: true });
 });
+
+// Clone the flagged starter deck (if any) into the given user's account.
+// Cards are copied fresh (state 'new') so everyone schedules independently.
+async function cloneStarterDeck(db, userId) {
+  const template = await db.prepare('SELECT * FROM decks WHERE is_starter = 1 LIMIT 1').first();
+  if (!template || template.user_id === userId) return false;
+  const { results: cards } = await db.prepare(
+    'SELECT front, back, tags FROM cards WHERE deck_id = ?'
+  ).bind(template.id).all();
+  if (!cards.length) return false;
+  const now = Date.now();
+  const res = await db.prepare(
+    'INSERT INTO decks (name, created_at, front_lang, back_lang, user_id) VALUES (?, ?, ?, ?, ?)'
+  ).bind('Deutsch Starter', now, template.front_lang, template.back_lang, userId).run();
+  const deckId = res.meta.last_row_id;
+  const stmt = db.prepare('INSERT INTO cards (deck_id, front, back, tags, created_at) VALUES (?, ?, ?, ?, ?)');
+  const batch = cards.map((c) => stmt.bind(deckId, c.front, c.back, c.tags, now));
+  for (let i = 0; i < batch.length; i += 100) await db.batch(batch.slice(i, i + 100));
+  return true;
+}
 
 // deck ownership guard: returns the deck row only if it belongs to the caller
 async function ownDeck(c, deckId) {
@@ -140,6 +163,14 @@ app.get('/api/decks', async (c) => {
      GROUP BY d.id ORDER BY d.name`
   ).bind(now, dayStart, c.get('uid')).all();
   return c.json({ decks: results });
+});
+
+// give the caller a copy of the starter deck (for accounts created before the
+// feature, or after deleting theirs)
+app.post('/api/starter', async (c) => {
+  const ok = await cloneStarterDeck(c.env.DB, c.get('uid'));
+  if (!ok) return c.json({ error: 'No starter deck available' }, 404);
+  return c.json({ ok: true });
 });
 
 app.post('/api/decks', async (c) => {
