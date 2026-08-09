@@ -105,24 +105,33 @@ app.post('/api/logout', async (c) => {
   return c.json({ ok: true });
 });
 
-// Clone the flagged starter deck (if any) into the given user's account.
-// Cards are copied fresh (state 'new') so everyone schedules independently.
+// Clone every flagged starter deck into the given user's account, skipping
+// ones they already have (by name). Cards are copied fresh (state 'new') so
+// everyone schedules independently.
 async function cloneStarterDeck(db, userId) {
-  const template = await db.prepare('SELECT * FROM decks WHERE is_starter = 1 LIMIT 1').first();
-  if (!template || template.user_id === userId) return false;
-  const { results: cards } = await db.prepare(
-    'SELECT front, back, tags FROM cards WHERE deck_id = ?'
-  ).bind(template.id).all();
-  if (!cards.length) return false;
-  const now = Date.now();
-  const res = await db.prepare(
-    'INSERT INTO decks (name, created_at, front_lang, back_lang, user_id) VALUES (?, ?, ?, ?, ?)'
-  ).bind('Deutsch Starter', now, template.front_lang, template.back_lang, userId).run();
-  const deckId = res.meta.last_row_id;
-  const stmt = db.prepare('INSERT INTO cards (deck_id, front, back, tags, created_at) VALUES (?, ?, ?, ?, ?)');
-  const batch = cards.map((c) => stmt.bind(deckId, c.front, c.back, c.tags, now));
-  for (let i = 0; i < batch.length; i += 100) await db.batch(batch.slice(i, i + 100));
-  return true;
+  const { results: templates } = await db.prepare('SELECT * FROM decks WHERE is_starter = 1').all();
+  let cloned = 0;
+  for (const template of templates) {
+    if (template.user_id === userId) continue;
+    const name = template.name === 'Default' ? 'Deutsch Starter' : template.name;
+    const exists = await db.prepare('SELECT id FROM decks WHERE user_id = ? AND name = ?')
+      .bind(userId, name).first();
+    if (exists) continue;
+    const { results: cards } = await db.prepare(
+      'SELECT front, back, tags FROM cards WHERE deck_id = ?'
+    ).bind(template.id).all();
+    if (!cards.length) continue;
+    const now = Date.now();
+    const res = await db.prepare(
+      'INSERT INTO decks (name, created_at, front_lang, back_lang, user_id) VALUES (?, ?, ?, ?, ?)'
+    ).bind(name, now, template.front_lang, template.back_lang, userId).run();
+    const deckId = res.meta.last_row_id;
+    const stmt = db.prepare('INSERT INTO cards (deck_id, front, back, tags, created_at) VALUES (?, ?, ?, ?, ?)');
+    const batch = cards.map((c) => stmt.bind(deckId, c.front, c.back, c.tags, now));
+    for (let i = 0; i < batch.length; i += 100) await db.batch(batch.slice(i, i + 100));
+    cloned++;
+  }
+  return cloned > 0;
 }
 
 // deck ownership guard: returns the deck row only if it belongs to the caller
