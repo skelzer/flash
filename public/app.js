@@ -139,8 +139,32 @@ window.addEventListener('hashchange', render);
 
 // ---------- login ----------
 
+let googleClientId; // undefined = not fetched yet, null = not configured
+async function fetchConfig() {
+  if (googleClientId !== undefined) return;
+  try {
+    const res = await fetch(`${BASE}api/config`);
+    googleClientId = (await res.json()).googleClientId;
+  } catch {
+    googleClientId = null;
+  }
+}
+
+function loadGsi() {
+  if (window.google?.accounts?.id) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = 'https://accounts.google.com/gsi/client';
+    s.async = true;
+    s.onload = resolve;
+    s.onerror = () => reject(new Error('Could not load Google sign-in'));
+    document.head.appendChild(s);
+  });
+}
+
 function viewLogin() {
   let mode = 'login';
+  let pendingCredential = null;
   const draw = () => {
     const registering = mode === 'register';
     $app.innerHTML = `
@@ -157,6 +181,15 @@ function viewLogin() {
         <button id="switch" style="background:none;color:var(--accent);font-weight:600">
           ${registering ? 'I already have an account' : 'New here? Create an account'}
         </button>
+        <div id="gsi-area" hidden>
+          <p class="notice">or</p>
+          <div id="gsi-btn" style="display:flex;justify-content:center"></div>
+          <div id="ginvite" hidden>
+            <p class="notice">First time here — enter the invite code to finish signing in.</p>
+            <input id="ginvite-code" placeholder="Invite code">
+            <button class="primary" id="ginvite-go">Continue with Google</button>
+          </div>
+        </div>
       </div>`;
 
     const submit = async () => {
@@ -183,7 +216,59 @@ function viewLogin() {
       el.onkeydown = (e) => { if (e.key === 'Enter') submit(); };
     });
     document.getElementById('user').focus();
+    setupGoogle();
   };
+
+  const googleSignIn = async (credential, invite) => {
+    const res = await fetch(`${BASE}api/auth/google`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(invite ? { credential, invite } : { credential }),
+    });
+    const body = await res.json();
+    if (res.ok) {
+      localStorage.setItem('token', body.token);
+      localStorage.setItem('username', body.username);
+      location.hash = '#decks';
+      return;
+    }
+    if (body.needInvite) {
+      pendingCredential = credential;
+      document.getElementById('ginvite').hidden = false;
+      document.getElementById('ginvite-code').focus();
+      return;
+    }
+    document.getElementById('err').textContent = body.error || 'Google sign-in failed';
+  };
+
+  async function setupGoogle() {
+    await fetchConfig();
+    if (!googleClientId) return;
+    const area = document.getElementById('gsi-area');
+    if (!area) return; // view changed while loading
+    try {
+      await loadGsi();
+    } catch {
+      return; // offline or blocked: password login still works
+    }
+    area.hidden = false;
+    google.accounts.id.initialize({
+      client_id: googleClientId,
+      callback: (resp) => googleSignIn(resp.credential),
+    });
+    google.accounts.id.renderButton(document.getElementById('gsi-btn'), {
+      theme: 'outline', size: 'large', text: 'continue_with', width: 280,
+    });
+    document.getElementById('ginvite-go').onclick = () => {
+      if (pendingCredential) googleSignIn(pendingCredential, document.getElementById('ginvite-code').value.trim());
+    };
+    document.getElementById('ginvite-code').onkeydown = (e) => {
+      if (e.key === 'Enter' && pendingCredential) {
+        googleSignIn(pendingCredential, document.getElementById('ginvite-code').value.trim());
+      }
+    };
+  }
+
   draw();
 }
 

@@ -229,6 +229,8 @@ label { font-size: 13px; font-weight: 600; color: var(--muted); margin-bottom: -
 .login h1 { margin: 0; }
 
 .error { color: var(--again); font-size: 14px; text-align: center; margin: 8px 0; }
+
+#ginvite:not([hidden]) { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
 .notice { color: var(--muted); font-size: 13.5px; }
 
 /* import */

@@ -39,7 +39,83 @@ async function createSession(db, userId) {
   return token;
 }
 
+// ---- Google sign-in ----
+
+const b64urlToBytes = (s) => {
+  const b = atob(s.replace(/-/g, '+').replace(/_/g, '/'));
+  return Uint8Array.from(b, (ch) => ch.charCodeAt(0));
+};
+
+let jwksCache = { keys: null, fetched: 0 };
+
+// Verifies a Google ID token: signature against Google's published keys,
+// then issuer, audience, and expiry. Returns the payload or null.
+async function verifyGoogleToken(credential, clientId) {
+  try {
+    const [h, p, sig] = credential.split('.');
+    if (!sig) return null;
+    const header = JSON.parse(new TextDecoder().decode(b64urlToBytes(h)));
+    const payload = JSON.parse(new TextDecoder().decode(b64urlToBytes(p)));
+
+    if (!jwksCache.keys || Date.now() - jwksCache.fetched > 3_600_000) {
+      const res = await fetch('https://www.googleapis.com/oauth2/v3/certs');
+      jwksCache = { keys: (await res.json()).keys, fetched: Date.now() };
+    }
+    const jwk = jwksCache.keys.find((k) => k.kid === header.kid);
+    if (!jwk) return null;
+
+    const key = await crypto.subtle.importKey(
+      'jwk', jwk, { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['verify']
+    );
+    const valid = await crypto.subtle.verify(
+      'RSASSA-PKCS1-v1_5', key, b64urlToBytes(sig), new TextEncoder().encode(`${h}.${p}`)
+    );
+    if (!valid) return null;
+    if (!['accounts.google.com', 'https://accounts.google.com'].includes(payload.iss)) return null;
+    if (payload.aud !== clientId) return null;
+    if (payload.exp * 1000 < Date.now()) return null;
+    return payload;
+  } catch {
+    return null;
+  }
+}
+
 // ---- auth routes ----
+
+// public config for the frontend (which sign-in methods are available)
+app.get('/api/config', (c) => c.json({ googleClientId: c.env.GOOGLE_CLIENT_ID || null }));
+
+app.post('/api/auth/google', async (c) => {
+  const { credential, invite } = await c.req.json();
+  if (!c.env.GOOGLE_CLIENT_ID) return c.json({ error: 'Google sign-in is not configured' }, 500);
+  const payload = await verifyGoogleToken(credential, c.env.GOOGLE_CLIENT_ID);
+  if (!payload?.sub) return c.json({ error: 'Google sign-in failed, try again' }, 401);
+
+  let user = await c.env.DB.prepare('SELECT * FROM users WHERE google_sub = ?').bind(payload.sub).first();
+  if (!user) {
+    // new Google account: still gated by the invite code
+    if (invite !== c.env.APP_PASSPHRASE) {
+      return c.json({ error: 'Invite code needed for your first sign-in', needInvite: true }, 403);
+    }
+    // derive a unique username from the email
+    const base = ((payload.email || 'user').split('@')[0].replace(/[^a-zA-Z0-9_.-]/g, '').slice(0, 20) || 'user')
+      .padEnd(3, '0');
+    let username = base;
+    for (let n = 2; ; n++) {
+      const taken = await c.env.DB.prepare('SELECT id FROM users WHERE username = ?').bind(username).first();
+      if (!taken) break;
+      username = `${base}${n}`;
+    }
+    const res = await c.env.DB.prepare(
+      "INSERT INTO users (username, pass_hash, salt, google_sub, email, created_at) VALUES (?, '', '', ?, ?, ?)"
+    ).bind(username, payload.sub, payload.email || null, Date.now()).run();
+    user = { id: res.meta.last_row_id, username };
+    await cloneStarterDeck(c.env.DB, user.id);
+  }
+
+  const token = await createSession(c.env.DB, user.id);
+  return c.json({ token, username: user.username });
+});
 
 app.post('/api/register', async (c) => {
   const { username, password, invite } = await c.req.json();
@@ -85,7 +161,7 @@ app.post('/api/login', async (c) => {
 
 app.use('/api/*', async (c, next) => {
   const path = c.req.path;
-  if (path === '/api/login' || path === '/api/register') return next();
+  if (['/api/login', '/api/register', '/api/auth/google', '/api/config'].includes(path)) return next();
   const token = (c.req.header('authorization') || '').replace(/^Bearer /, '');
   if (!token) return c.json({ error: 'unauthorized' }, 401);
   const session = await c.env.DB.prepare(

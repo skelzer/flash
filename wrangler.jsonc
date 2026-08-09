@@ -14,6 +14,10 @@
     { "pattern": "flash.luquematte.com", "custom_domain": true }
   ],
   "workers_dev": true,
+  "vars": {
+    // OAuth client ID from Google Cloud Console; empty = Google sign-in hidden
+    "GOOGLE_CLIENT_ID": ""
+  },
   "d1_databases": [
     {
       "binding": "DB",
