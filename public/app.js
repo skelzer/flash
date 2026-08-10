@@ -8,7 +8,12 @@ const BASE = location.pathname.replace(/[^/]*$/, '');
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (ch) =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
 
-const stripHtml = (s) => { const d = document.createElement('div'); d.innerHTML = s; return d.textContent || ''; };
+const stripHtml = (s) => {
+  const d = document.createElement('div');
+  // space before each tag so block boundaries (<hr>, <br>, </div>) don't glue words together
+  d.innerHTML = String(s ?? '').replace(/</g, ' <');
+  return (d.textContent || '').replace(/\s+/g, ' ').trim();
+};
 
 // Anki-style day boundary at 4am local time
 function dayStart() {
@@ -725,6 +730,15 @@ const DE_STOPWORDS = new Set([
   'Zu', 'Im', 'In', 'Am', 'An', 'Auf', 'Aus', 'Bei', 'Mit', 'Nach', 'Von', 'Vor', 'Für', 'Um',
   'Über', 'Unter', 'Durch', 'Gegen', 'Ohne', 'Bis', 'Beim', 'Zum', 'Zur', 'Vom', 'Ins', 'Ans',
   'Es', 'Man', 'Hier', 'Da', 'Dort', 'Heute', 'Morgen', 'Gestern', 'Sehr', 'So', 'Nur', 'Schon',
+  // grammar meta-vocabulary, not collocation material
+  'Akkusativ', 'Dativ', 'Genitiv', 'Nominativ', 'Singular', 'Plural', 'Präposition', 'Kasus', 'Ausnahme',
+]);
+
+// prepositions that govern (or can govern) the dative: after these, "der" is
+// the dative feminine article and "den" is dative plural
+const DATIVE_PREPS = new Set([
+  'mit', 'bei', 'von', 'zu', 'nach', 'aus', 'seit', 'gegenüber',
+  'an', 'auf', 'in', 'vor', 'unter', 'über', 'zwischen', 'neben', 'hinter',
 ]);
 
 // Articles/determiners that reveal gender when they directly precede the noun.
@@ -778,21 +792,33 @@ function buildNexuses(cards, germanSide, otherSide) {
     const nouns = new Set(tokens.filter((t) => /^[A-ZÄÖÜ]/.test(t) && t.length > 2 && !DE_STOPWORDS.has(t)));
     for (const noun of nouns) {
       if (!byNoun.has(noun)) byNoun.set(noun, []);
-      // capture the word right before the noun: strip it if it's an article,
-      // and remember it as a gender clue
-      const m = german.match(new RegExp(`(?:\\b([A-Za-zÄÖÜäöüß]+)\\s+)?${noun}(?=$|[^A-Za-zÄÖÜäöüß])`));
-      const prev = (m?.[1] || '').toLowerCase();
+      // capture up to two words before the noun: the article is a gender clue,
+      // and the word before the article disambiguates dative forms
+      const m = german.match(new RegExp(`(?:\\b([A-Za-zÄÖÜäöüß]+)\\s+)?(?:\\b([A-Za-zÄÖÜäöüß]+)\\s+)?${noun}(?=$|[^A-Za-zÄÖÜäöüß])`));
+      const beforeArticle = (m[2] ? m[1] : '')?.toLowerCase() || '';
+      const prev = ((m[2] ?? m[1]) || '').toLowerCase();
       const isArticle = prev in ARTICLE_GENDER || ARTICLE_AMBIGUOUS.has(prev);
+
+      let vote = isArticle ? ARTICLE_GENDER[prev] ?? null : null;
+      if (prev === 'der' && DATIVE_PREPS.has(beforeArticle)) vote = 'f';   // "vor der Prüfung"
+      if (prev === 'den' && DATIVE_PREPS.has(beforeArticle)) vote = null;  // "mit den Kindern" (plural)
+      // adjective between article and noun ("das neue Projekt"): the word one
+      // further back can still vote, but only case-unambiguous articles
+      if (!isArticle && !vote && beforeArticle in ARTICLE_GENDER
+          && !['der', 'den', 'die'].includes(beforeArticle)) {
+        vote = ARTICLE_GENDER[beforeArticle];
+      }
+
       // drop the article+noun entirely at the start of the phrase ("eine
       // Entscheidung treffen" -> "treffen"); mid-phrase keep a placeholder so
       // the grammar stays readable ("sich an den Plan halten" -> "sich an ~ halten")
-      const keepPrefix = isArticle ? '' : (m[1] ? m[1] + ' ' : '');
-      const atStart = m.index === 0 && (!m[1] || isArticle);
+      const keepPrefix = (m[2] && m[1] ? m[1] + ' ' : '') + (isArticle ? '' : ((m[2] ?? m[1]) ? (m[2] ?? m[1]) + ' ' : ''));
+      const atStart = m.index === 0 && !(m[2] && m[1]) && (!prev || isArticle);
       const short = german.replace(m[0], atStart ? keepPrefix : `${keepPrefix}~`)
         .replace(/\s+/g, ' ').trim() || '~';
       byNoun.get(noun).push({
         id: card.id, phrase: german, other, variant: noun, short,
-        articleWord: isArticle ? prev : null,
+        articleWord: isArticle ? prev : null, vote,
       });
     }
   }
@@ -814,10 +840,9 @@ function buildNexuses(cards, germanSide, otherSide) {
       // (before a plural it says nothing about gender)
       const votes = { m: 0, f: 0, n: 0 };
       for (const it of unique) {
-        const w = it.articleWord;
-        if (!w || !(w in ARTICLE_GENDER)) continue;
-        if (w === 'die' && it.variant !== noun) continue;
-        votes[ARTICLE_GENDER[w]]++;
+        if (!it.vote) continue;
+        if (it.articleWord === 'die' && it.variant !== noun) continue;
+        votes[it.vote]++;
       }
       const best = Object.entries(votes).sort((a, b) => b[1] - a[1]);
       let gender = best[0][1] > 0 && best[0][1] > best[1][1] ? best[0][0] : null;
@@ -828,8 +853,23 @@ function buildNexuses(cards, germanSide, otherSide) {
     .sort((a, b) => b.items.length - a.items.length || a.noun.localeCompare(b.noun));
 }
 
-const leafHTML = (it, i) =>
-  `<div class="mmleaf" data-i="${i}" data-de="${esc(it.short)}" data-en="${esc(it.other)}">${esc(it.short)}</div>`;
+// long phrases: keep the head (usually the verb) plus a window around the noun
+function leafLabel(short) {
+  if (short.length <= 60) return short;
+  const words = short.split(' ');
+  const ti = words.findIndex((w) => w.includes('~'));
+  if (ti < 0) return words.slice(0, 8).join(' ') + ' …';
+  if (ti <= 6) {
+    const e = Math.min(words.length, ti + 5);
+    return words.slice(0, e).join(' ') + (e < words.length ? ' …' : '');
+  }
+  return `${words.slice(0, 3).join(' ')} … ${words.slice(ti - 2, Math.min(words.length, ti + 3)).join(' ')}`;
+}
+
+const leafHTML = (it, i) => {
+  const label = leafLabel(it.short);
+  return `<div class="mmleaf" data-i="${i}" data-de="${esc(label)}" data-en="${esc(it.other)}">${esc(label)}</div>`;
+};
 
 // Small nexuses: leaves on an ellipse around the hub.
 function radialLayout(map, svg, n) {
@@ -888,7 +928,10 @@ function renderMap(container, noun, items, gender) {
     </div>
     <p class="notice" style="text-align:center">Tap a phrase to see its translation.</p>`;
 
-  if (n <= 8) {
+  // the radial layout only fits short verb-style leaves; sentence-style pills
+  // are wide and collide with the hub, so they always get the column layout
+  const wideLeaves = leaves.some((it) => leafLabel(it.short).length > 24);
+  if (n <= 8 && !wideLeaves) {
     const height = Math.max(320, Math.min(600, 200 + n * 28));
     container.innerHTML = `<div class="mindmap" style="height:${height}px">
       <svg class="mmlines"></svg>
