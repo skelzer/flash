@@ -277,6 +277,7 @@ async function viewDecks() {
   const rows = decks.map((d) => {
     const newRemaining = Math.min(d.newCount || 0, Math.max(0, newLimit() - (d.introducedToday || 0)));
     const due = d.dueCount || 0;
+    const seenPct = d.total ? Math.round(((d.total - (d.newCount || 0)) / d.total) * 100) : 0;
     return `<button class="deck-row" data-id="${d.id}" data-name="${esc(d.name)}">
       <span class="name">${esc(d.name)}</span>
       <span class="counts">
@@ -284,12 +285,17 @@ async function viewDecks() {
         <span class="${due ? 'count-due' : 'count-zero'}">${due}</span>
       </span>
       <span class="iconbtn deck-menu" data-id="${d.id}" data-name="${esc(d.name)}">⋯</span>
+      <span class="deck-progress"><span style="width:${seenPct}%"></span></span>
     </button>`;
   }).join('');
 
   $app.innerHTML = `
-    ${topbar('Flash', { back: null, right: `<button class="iconbtn" id="stats-btn" title="Statistics">📊</button>
-      <button class="iconbtn" id="import-btn" title="Import .apkg">⬆</button>` })}
+    <div class="topbar">
+      <img class="brand" src="./wizard.gif" alt="">
+      <h1>Flash</h1>
+      <button class="iconbtn" id="stats-btn" title="Statistics">📊</button>
+      <button class="iconbtn" id="import-btn" title="Import .apkg">⬆</button>
+    </div>
     ${decks.length ? rows : `<p class="notice" style="text-align:center;margin-top:50px">No decks yet.</p>
       <div class="actions"><button class="primary" id="starter">🇩🇪 Get the starter deck</button></div>
       <p class="notice" style="text-align:center">German collocations to try the app with —<br>or import your own .apkg below.</p>`}
@@ -419,6 +425,7 @@ async function viewStudy(deckId) {
     showingBack = false;
     if (!queue.length) {
       $app.innerHTML = `${topbar(deckName)}
+        <div class="sbar"><span style="width:100%"></span></div>
         <div class="done">
           <div class="big">🎉</div>
           <h2>Fertig!</h2>
@@ -433,8 +440,11 @@ async function viewStudy(deckId) {
 
   function draw() {
     const p = current.predictions || {};
+    const done = reviewed;
+    const pct = Math.round((done / Math.max(1, done + queue.length + 1)) * 100);
     $app.innerHTML = `
       ${topbar(deckName, { right: counts() })}
+      <div class="sbar"><span style="width:${pct}%"></span></div>
       <div class="study">
         <div class="card-area${showingBack ? '' : ' clickable'}" id="card">
           <div class="card-front">${current.front}</div>
