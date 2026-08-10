@@ -328,7 +328,42 @@ progress { width: 100%; accent-color: var(--accent); }
   overflow: hidden;
 }
 .mmlines { position: absolute; inset: 0; width: 100%; height: 100%; }
-.mmlines line { stroke: var(--border); stroke-width: 1.5; }
+.mmlines line, .mmlines path { stroke: var(--border); stroke-width: 1.5; }
+
+/* two-column layout for nexuses with many collocations */
+.mindmap.tree {
+  display: flex;
+  align-items: center;
+  gap: 26px;
+  padding: 18px 8px;
+  height: auto;
+}
+.mindmap.tree .mmcol {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  z-index: 1;
+}
+.mindmap.tree .mmcol.left { align-items: flex-end; }
+.mindmap.tree .mmcol.right { align-items: flex-start; }
+.mindmap.tree .mmhub { flex: 0 0 auto; z-index: 2; max-width: 34%; }
+.mindmap.tree .mmleaf {
+  position: static;
+  transform: none;
+  max-width: 100%;
+  hyphens: auto;
+  overflow-wrap: anywhere;
+}
+.mindmap.tree .mmnexus { hyphens: manual; overflow-wrap: normal; }
+
+@media (max-width: 430px) {
+  .mindmap.tree { gap: 12px; padding: 14px 6px; }
+  .mindmap.tree .mmleaf { font-size: 12px; padding: 6px 7px; }
+  .mindmap.tree .mmhub { max-width: 33%; }
+  .mindmap.tree .mmnexus { font-size: 13px; padding: 8px 10px; }
+}
 .mmleaf {
   position: absolute;
   left: 50%;

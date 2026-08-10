@@ -16,7 +16,7 @@
   "workers_dev": true,
   "vars": {
     // OAuth client ID from Google Cloud Console; empty = Google sign-in hidden
-    "GOOGLE_CLIENT_ID": ""
+    "GOOGLE_CLIENT_ID": "312332025518-hm2cf8d9jvm3o6nonom03bqgo07no4i9.apps.googleusercontent.com"
   },
   "d1_databases": [
     {

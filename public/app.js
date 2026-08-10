@@ -840,55 +840,94 @@ function buildNexuses(cards, germanSide, otherSide) {
     .sort((a, b) => b.items.length - a.items.length || a.noun.localeCompare(b.noun));
 }
 
-function renderRadial(container, noun, items, gender) {
-  const MAX_LEAVES = 18;
+const leafHTML = (it, i) =>
+  `<div class="mmleaf" data-i="${i}" data-de="${esc(it.short)}" data-en="${esc(it.other)}">${esc(it.short)}</div>`;
+
+// Small nexuses: leaves on an ellipse around the hub.
+function radialLayout(map, svg, n) {
+  const w = map.clientWidth, h = map.clientHeight;
+  const cx = w / 2, cy = h / 2;
+  const rx = Math.min(w / 2 - 78, 90 + n * 6);
+  const ry = Math.min(h / 2 - 34, 70 + n * 12);
+  svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
+  let lines = '';
+  map.querySelectorAll('.mmleaf:not(.mmnexus)').forEach((el) => {
+    const i = Number(el.dataset.i);
+    const a = -Math.PI / 2 + (i * 2 * Math.PI) / n;
+    const x = cx + rx * Math.cos(a);
+    const y = cy + ry * Math.sin(a);
+    el.style.left = `${x}px`;
+    el.style.top = `${y}px`;
+    lines += `<line x1="${cx}" y1="${cy}" x2="${x}" y2="${y}"/>`;
+  });
+  svg.innerHTML = lines;
+}
+
+// Large nexuses: hub centered between two stacked columns, curved connectors.
+// Grows downward, so any number of leaves stays readable.
+function treeLayout(map, svg) {
+  const mapRect = map.getBoundingClientRect();
+  svg.setAttribute('viewBox', `0 0 ${map.clientWidth} ${map.clientHeight}`);
+  const hub = map.querySelector('.mmnexus').getBoundingClientRect();
+  const hubL = hub.left - mapRect.left;
+  const hubR = hub.right - mapRect.left;
+  const hubY = hub.top - mapRect.top + hub.height / 2;
+  let paths = '';
+  map.querySelectorAll('.mmleaf:not(.mmnexus)').forEach((el) => {
+    const r = el.getBoundingClientRect();
+    const onLeft = el.parentElement.classList.contains('left');
+    const px = (onLeft ? r.right : r.left) - mapRect.left;
+    const py = r.top - mapRect.top + r.height / 2;
+    const hx = onLeft ? hubL : hubR;
+    const mx = (hx + px) / 2;
+    paths += `<path d="M${hx},${hubY} C${mx},${hubY} ${mx},${py} ${px},${py}" fill="none"/>`;
+  });
+  svg.innerHTML = paths;
+}
+
+function renderMap(container, noun, items, gender) {
+  const MAX_LEAVES = 60;
   const leaves = items.slice(0, MAX_LEAVES);
   const n = leaves.length;
-  const height = Math.max(320, Math.min(600, 200 + n * 28));
   const meta = GENDER_META[gender];
-  const nexusLabel = meta ? `${meta.article} ${noun}` : noun;
-  container.innerHTML = `<div class="mindmap" style="height:${height}px">
-    <svg class="mmlines"></svg>
-    <div class="mmleaf mmnexus"${meta ? ` style="background:${meta.color}"` : ''}>${esc(nexusLabel)}</div>
-    ${leaves.map((it, i) =>
-      `<div class="mmleaf" data-i="${i}" data-de="${esc(it.short)}" data-en="${esc(it.other)}">${esc(it.short)}</div>`
-    ).join('')}
-  </div>
-  ${items.length > n ? `<p class="notice" style="text-align:center">+${items.length - n} more not shown</p>` : ''}
-  <div class="chips" style="justify-content:center;margin-top:8px">
-    <span class="chip"><span class="dot" style="background:var(--g-m)"></span>der</span>
-    <span class="chip"><span class="dot" style="background:var(--g-f)"></span>die</span>
-    <span class="chip"><span class="dot" style="background:var(--g-n)"></span>das</span>
-  </div>
-  <p class="notice" style="text-align:center">Tap a phrase to see its translation.</p>`;
+  const nexus = `<div class="mmleaf mmnexus"${meta ? ` style="background:${meta.color}"` : ''}>${esc(meta ? `${meta.article} ${noun}` : noun)}</div>`;
+  const footer = `
+    ${items.length > n ? `<p class="notice" style="text-align:center">+${items.length - n} more not shown</p>` : ''}
+    <div class="chips" style="justify-content:center;margin-top:8px">
+      <span class="chip"><span class="dot" style="background:var(--g-m)"></span>der</span>
+      <span class="chip"><span class="dot" style="background:var(--g-f)"></span>die</span>
+      <span class="chip"><span class="dot" style="background:var(--g-n)"></span>das</span>
+    </div>
+    <p class="notice" style="text-align:center">Tap a phrase to see its translation.</p>`;
+
+  if (n <= 8) {
+    const height = Math.max(320, Math.min(600, 200 + n * 28));
+    container.innerHTML = `<div class="mindmap" style="height:${height}px">
+      <svg class="mmlines"></svg>
+      ${nexus}
+      ${leaves.map(leafHTML).join('')}
+    </div>${footer}`;
+    radialLayout(container.querySelector('.mindmap'), container.querySelector('.mmlines'), n);
+  } else {
+    // alternate assignment keeps the two columns balanced
+    const left = leaves.filter((_, i) => i % 2 === 0);
+    const right = leaves.filter((_, i) => i % 2 === 1);
+    container.innerHTML = `<div class="mindmap tree" lang="de">
+      <svg class="mmlines"></svg>
+      <div class="mmcol left">${left.map((it) => leafHTML(it, leaves.indexOf(it))).join('')}</div>
+      <div class="mmhub">${nexus}</div>
+      <div class="mmcol right">${right.map((it) => leafHTML(it, leaves.indexOf(it))).join('')}</div>
+    </div>${footer}`;
+    treeLayout(container.querySelector('.mindmap'), container.querySelector('.mmlines'));
+  }
 
   const map = container.querySelector('.mindmap');
-  const svg = container.querySelector('.mmlines');
-  const layout = () => {
-    const w = map.clientWidth, h = map.clientHeight;
-    const cx = w / 2, cy = h / 2;
-    const rx = Math.min(w / 2 - 78, 90 + n * 6);
-    const ry = Math.min(h / 2 - 34, 70 + n * 12);
-    svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
-    let lines = '';
-    map.querySelectorAll('.mmleaf:not(.mmnexus)').forEach((el) => {
-      const i = Number(el.dataset.i);
-      const a = -Math.PI / 2 + (i * 2 * Math.PI) / n;
-      const x = cx + rx * Math.cos(a);
-      const y = cy + ry * Math.sin(a);
-      el.style.left = `${x}px`;
-      el.style.top = `${y}px`;
-      lines += `<line x1="${cx}" y1="${cy}" x2="${x}" y2="${y}"/>`;
-    });
-    svg.innerHTML = lines;
-  };
-  layout();
-
   map.addEventListener('click', (e) => {
     const leaf = e.target.closest('.mmleaf:not(.mmnexus)');
     if (!leaf) return;
     const flipped = leaf.classList.toggle('flipped');
     leaf.textContent = flipped ? (leaf.dataset.en || '—') : leaf.dataset.de;
+    if (map.classList.contains('tree')) treeLayout(map, map.querySelector('.mmlines'));
   });
 }
 
@@ -926,7 +965,7 @@ async function viewMap(deckId) {
   const chips = $app.querySelectorAll('.nexus-chip');
   const select = (i) => {
     chips.forEach((ch) => ch.classList.toggle('active', Number(ch.dataset.i) === i));
-    renderRadial(document.getElementById('mapbox'), nexuses[i].noun, nexuses[i].items, nexuses[i].gender);
+    renderMap(document.getElementById('mapbox'), nexuses[i].noun, nexuses[i].items, nexuses[i].gender);
   };
   chips.forEach((ch) => { ch.onclick = () => select(Number(ch.dataset.i)); });
   select(0);
