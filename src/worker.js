@@ -86,17 +86,13 @@ async function verifyGoogleToken(credential, clientId) {
 app.get('/api/config', (c) => c.json({ googleClientId: c.env.GOOGLE_CLIENT_ID || null }));
 
 app.post('/api/auth/google', async (c) => {
-  const { credential, invite } = await c.req.json();
+  const { credential } = await c.req.json();
   if (!c.env.GOOGLE_CLIENT_ID) return c.json({ error: 'Google sign-in is not configured' }, 500);
   const payload = await verifyGoogleToken(credential, c.env.GOOGLE_CLIENT_ID);
   if (!payload?.sub) return c.json({ error: 'Google sign-in failed, try again' }, 401);
 
   let user = await c.env.DB.prepare('SELECT * FROM users WHERE google_sub = ?').bind(payload.sub).first();
   if (!user) {
-    // new Google account: still gated by the invite code
-    if (invite !== c.env.APP_PASSPHRASE) {
-      return c.json({ error: 'Invite code needed for your first sign-in', needInvite: true }, 403);
-    }
     // derive a unique username from the email
     const base = ((payload.email || 'user').split('@')[0].replace(/[^a-zA-Z0-9_.-]/g, '').slice(0, 20) || 'user')
       .padEnd(3, '0');
@@ -118,9 +114,7 @@ app.post('/api/auth/google', async (c) => {
 });
 
 app.post('/api/register', async (c) => {
-  const { username, password, invite } = await c.req.json();
-  if (!c.env.APP_PASSPHRASE) return c.json({ error: 'Server invite code not configured' }, 500);
-  if (invite !== c.env.APP_PASSPHRASE) return c.json({ error: 'Wrong invite code' }, 403);
+  const { username, password } = await c.req.json();
   if (!/^[a-zA-Z0-9_.-]{3,24}$/.test(username || '')) {
     return c.json({ error: 'Username: 3–24 letters, digits, . _ -' }, 400);
   }

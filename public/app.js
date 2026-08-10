@@ -164,44 +164,39 @@ function loadGsi() {
 
 function viewLogin() {
   let mode = 'login';
-  let pendingCredential = null;
+  let showPw = false; // classic form is tucked away; Google is the default
+
   const draw = () => {
     const registering = mode === 'register';
     $app.innerHTML = `
       <div class="login">
         <img class="logo" src="./wizard.gif" alt="Flash wizard" width="88" height="88">
         <h1>Flash</h1>
-        <p class="notice">${registering ? 'Create your account' : 'Sign in to study'}</p>
-        <input id="user" placeholder="Username" autocomplete="username" autocapitalize="none">
-        <input id="pass" type="password" placeholder="Password"
-          autocomplete="${registering ? 'new-password' : 'current-password'}">
-        ${registering ? `<input id="invite" placeholder="Invite code">` : ''}
+        <p class="notice">Sign in to study</p>
+        <div id="gsi-btn" style="display:flex;justify-content:center;min-height:44px"></div>
         <div id="err" class="error"></div>
-        <button class="primary show-btn" id="go">${registering ? 'Create account' : 'Sign in'}</button>
-        <button id="switch" style="background:none;color:var(--accent);font-weight:600">
-          ${registering ? 'I already have an account' : 'New here? Create an account'}
+        <button id="alt" style="background:none;color:var(--muted);font-size:13.5px;text-decoration:underline">
+          ${showPw ? 'Hide' : 'Use username & password instead'}
         </button>
-        <div id="gsi-area" hidden>
-          <p class="notice">or</p>
-          <div id="gsi-btn" style="display:flex;justify-content:center"></div>
-          <div id="ginvite" hidden>
-            <p class="notice">First time here — enter the invite code to finish signing in.</p>
-            <input id="ginvite-code" placeholder="Invite code">
-            <button class="primary" id="ginvite-go">Continue with Google</button>
-          </div>
+        <div id="pwform" ${showPw ? '' : 'hidden'}>
+          <input id="user" placeholder="Username" autocomplete="username" autocapitalize="none">
+          <input id="pass" type="password" placeholder="Password"
+            autocomplete="${registering ? 'new-password' : 'current-password'}">
+          <button class="primary show-btn" id="go">${registering ? 'Create account' : 'Sign in'}</button>
+          <button id="switch" style="background:none;color:var(--accent);font-weight:600">
+            ${registering ? 'I already have an account' : 'New here? Create an account'}
+          </button>
         </div>
       </div>`;
 
     const submit = async () => {
       try {
-        const body = {
-          username: document.getElementById('user').value.trim(),
-          password: document.getElementById('pass').value,
-        };
-        if (registering) body.invite = document.getElementById('invite').value.trim();
         const { token, username } = await api(registering ? '/register' : '/login', {
           method: 'POST',
-          body: JSON.stringify(body),
+          body: JSON.stringify({
+            username: document.getElementById('user').value.trim(),
+            password: document.getElementById('pass').value,
+          }),
         });
         localStorage.setItem('token', token);
         localStorage.setItem('username', username);
@@ -212,18 +207,19 @@ function viewLogin() {
     };
     document.getElementById('go').onclick = submit;
     document.getElementById('switch').onclick = () => { mode = registering ? 'login' : 'register'; draw(); };
-    $app.querySelectorAll('input').forEach((el) => {
+    document.getElementById('alt').onclick = () => { showPw = !showPw; draw(); };
+    $app.querySelectorAll('#pwform input').forEach((el) => {
       el.onkeydown = (e) => { if (e.key === 'Enter') submit(); };
     });
-    document.getElementById('user').focus();
+    if (showPw) document.getElementById('user').focus();
     setupGoogle();
   };
 
-  const googleSignIn = async (credential, invite) => {
+  const googleSignIn = async (credential) => {
     const res = await fetch(`${BASE}api/auth/google`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(invite ? { credential, invite } : { credential }),
+      body: JSON.stringify({ credential }),
     });
     const body = await res.json();
     if (res.ok) {
@@ -232,41 +228,33 @@ function viewLogin() {
       location.hash = '#decks';
       return;
     }
-    if (body.needInvite) {
-      pendingCredential = credential;
-      document.getElementById('ginvite').hidden = false;
-      document.getElementById('ginvite-code').focus();
-      return;
-    }
     document.getElementById('err').textContent = body.error || 'Google sign-in failed';
   };
 
   async function setupGoogle() {
     await fetchConfig();
-    if (!googleClientId) return;
-    const area = document.getElementById('gsi-area');
-    if (!area) return; // view changed while loading
+    const altBtn = document.getElementById('alt');
+    if (!googleClientId) {
+      // no Google configured: classic form is the only way in
+      if (!showPw) { showPw = true; draw(); }
+      if (altBtn) altBtn.hidden = true;
+      return;
+    }
     try {
       await loadGsi();
     } catch {
-      return; // offline or blocked: password login still works
+      if (!showPw) { showPw = true; draw(); }
+      return;
     }
-    area.hidden = false;
+    const btn = document.getElementById('gsi-btn');
+    if (!btn) return; // view changed while loading
     google.accounts.id.initialize({
       client_id: googleClientId,
       callback: (resp) => googleSignIn(resp.credential),
     });
-    google.accounts.id.renderButton(document.getElementById('gsi-btn'), {
+    google.accounts.id.renderButton(btn, {
       theme: 'outline', size: 'large', text: 'continue_with', width: 280,
     });
-    document.getElementById('ginvite-go').onclick = () => {
-      if (pendingCredential) googleSignIn(pendingCredential, document.getElementById('ginvite-code').value.trim());
-    };
-    document.getElementById('ginvite-code').onkeydown = (e) => {
-      if (e.key === 'Enter' && pendingCredential) {
-        googleSignIn(pendingCredential, document.getElementById('ginvite-code').value.trim());
-      }
-    };
   }
 
   draw();
