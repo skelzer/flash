@@ -4,3 +4,8 @@ node_modules/
 public/importer.js
 public/sql-wasm-browser.wasm
 public/test.apkg
+
+# D1 dumps — contain real user rows, password hashes and session tokens
+backup-*.sql
+*.sqlite
+*.db
