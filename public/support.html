@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Support — Flash</title>
+<meta name="description" content="Help and contact for Flash, a German flashcard app.">
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #ffffff;
+    --fg: #1a1c24;
+    --muted: #5b6070;
+    --accent: #4f46e5;
+    --rule: #e4e6ee;
+    --card: #f7f8fc;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d0f16;
+      --fg: #e6e8f0;
+      --muted: #9aa0b4;
+      --accent: #a5b4fc;
+      --rule: #232735;
+      --card: #151824;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 2.5rem 1.25rem 4rem;
+    background: var(--bg);
+    color: var(--fg);
+    font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-text-size-adjust: 100%;
+  }
+  main { max-width: 42rem; margin: 0 auto; }
+  h1 { font-size: 1.75rem; line-height: 1.2; margin: 0 0 .35rem; letter-spacing: -.01em; }
+  h2 { font-size: 1.1rem; margin: 2.25rem 0 .6rem; letter-spacing: -.005em; }
+  .tagline { color: var(--muted); font-size: .95rem; margin: 0 0 2rem; }
+  p { margin: 0 0 1rem; }
+  ul { margin: 0 0 1rem; padding-left: 1.25rem; }
+  li { margin-bottom: .4rem; }
+  a { color: var(--accent); }
+  hr { border: 0; border-top: 1px solid var(--rule); margin: 2.5rem 0 1.5rem; }
+  .contact {
+    background: var(--card);
+    border: 1px solid var(--rule);
+    border-radius: 10px;
+    padding: 1rem 1.15rem;
+    margin: 0 0 1rem;
+  }
+  .q { font-weight: 600; margin: 1.5rem 0 .35rem; }
+  footer { color: var(--muted); font-size: .875rem; }
+  code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: .9em;
+    background: var(--card);
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    padding: .1em .35em;
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>Flash — Support</h1>
+  <p class="tagline">German flashcards with spaced repetition.</p>
+
+  <p>Flash is a spaced-repetition flashcard app built for learning German. You make decks,
+  review cards on a schedule that adapts to how well you remember them, and can import
+  existing Anki <code>.apkg</code> decks. It runs on iPhone and in any browser at
+  <a href="https://flash.luquematte.com">flash.luquematte.com</a>, with the same account on
+  both.</p>
+
+  <h2>Getting help</h2>
+  <div class="contact">
+    <p style="margin:0">Email <a href="mailto:luquemar91@gmail.com">luquemar91@gmail.com</a>.
+    It is a one-person project, so replies are personal but not instant — expect a couple of
+    days. Including your username and what you were doing when something went wrong makes it
+    much easier to fix.</p>
+  </div>
+
+  <h2>Common questions</h2>
+
+  <p class="q">How do I delete my account and all my data?</p>
+  <p>In the app, on the decks screen, scroll to the footer and tap <strong>Delete
+  account</strong>. This immediately and permanently removes your account, decks, cards and
+  review history. You do not need to email anyone to have it done.</p>
+
+  <p class="q">The German text-to-speech sounds wrong, or does not speak at all.</p>
+  <p>Flash uses the German voices installed on your device. If none is installed, iOS falls
+  back to an English voice or stays silent. Install one under
+  <strong>Settings &rsaquo; Accessibility &rsaquo; Spoken Content &rsaquo; Voices &rsaquo;
+  Deutsch</strong>, then reopen Flash. The higher-quality voices are a larger download but
+  sound considerably better.</p>
+
+  <p class="q">Can I import my existing Anki decks?</p>
+  <p>Yes — Flash imports Anki <code>.apkg</code> files, including media-free note types.
+  Very large or unusually structured decks may not import cleanly; if one fails, email the
+  deck name and roughly how many cards it has.</p>
+
+  <p class="q">Do I need an internet connection?</p>
+  <p>Yes. Your decks and review scheduling live on the server so they stay in sync between
+  your phone and the web, so studying requires a connection.</p>
+
+  <p class="q">I forgot my password / cannot sign in.</p>
+  <p>Email <a href="mailto:luquemar91@gmail.com">luquemar91@gmail.com</a> from the address on
+  the account. If you originally signed in with Apple or Google, use that same button again
+  rather than a password — signing in the other way creates a separate account.</p>
+
+  <h2>Privacy</h2>
+  <p>Flash has no analytics, no ads and no tracking. See the
+  <a href="/privacy.html">privacy policy</a> for exactly what is stored and how to delete it.</p>
+
+  <hr>
+  <footer>
+    <p style="margin:0"><a href="/privacy.html">Privacy policy</a> ·
+    <a href="/">Open Flash</a></p>
+  </footer>
+</main>
+</body>
+</html>

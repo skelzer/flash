@@ -7,15 +7,25 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "dev": "npm run build && wrangler dev",
+    "ios:sync": "npm run build && cap sync ios",
     "deploy": "npm run build && wrangler deploy",
     "db:migrate:local": "wrangler d1 migrations apply flash-db --local",
     "db:migrate:remote": "wrangler d1 migrations apply flash-db --remote"
   },
   "devDependencies": {
+    "@capacitor/cli": "^8.5.0",
+    "@capacitor/ios": "^8.5.0",
     "esbuild": "^0.28.1",
     "wrangler": "^4.118.0"
   },
   "dependencies": {
+    "@capacitor/core": "^8.5.0",
+    "@capacitor/haptics": "^8.0.2",
+    "@capacitor/keyboard": "^8.0.5",
+    "@capacitor/preferences": "^8.0.1",
+    "@capacitor/splash-screen": "^8.0.2",
+    "@capacitor/status-bar": "^8.0.3",
+    "@capgo/capacitor-social-login": "^8.4.1",
     "fzstd": "^0.1.1",
     "hono": "^4.13.0",
     "jszip": "^3.10.1",

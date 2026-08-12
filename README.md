@@ -32,7 +32,6 @@ npm run dev
 Create a `.dev.vars` file for local secrets:
 
 ```
-APP_PASSPHRASE=<anything, gates registration if set>
 GOOGLE_CLIENT_ID=<optional; Google sign-in is hidden when empty>
 ```
 

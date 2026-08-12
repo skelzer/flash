@@ -1,0 +1,19 @@
+{
+  "appId": "com.luquematte.flash",
+  "appName": "Flash",
+  "webDir": "public",
+  "backgroundColor": "#0d0f16",
+  "ios": {
+    "contentInset": "automatic"
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchShowDuration": 800,
+      "launchAutoHide": true,
+      "backgroundColor": "#0d0f16"
+    },
+    "Keyboard": {
+      "resize": "body"
+    }
+  }
+}

@@ -5,6 +5,13 @@ public/importer.js
 public/sql-wasm-browser.wasm
 public/test.apkg
 
+# iOS / Capacitor build artifacts (ios/ itself IS committed, from the Mac)
+ios/App/Pods/
+ios/App/build/
+ios/App/App/public/
+ios/DerivedData/
+.DS_Store
+
 # D1 dumps — contain real user rows, password hashes and session tokens
 backup-*.sql
 *.sqlite

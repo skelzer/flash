@@ -28,16 +28,28 @@ function chunk(type, data) {
   return Buffer.concat([len, body, crc]);
 }
 
-function encodePng(size, rgba) {
+// alpha=false writes colour type 2 (truecolour, no alpha channel at all).
+// The App Store icon (1024x1024) is rejected if the PNG carries an alpha channel.
+function encodePng(size, rgba, alpha = true) {
+  const ch = alpha ? 4 : 3;
   const ihdr = Buffer.alloc(13);
   ihdr.writeUInt32BE(size, 0);
   ihdr.writeUInt32BE(size, 4);
-  ihdr[8] = 8;  // bit depth
-  ihdr[9] = 6;  // RGBA
-  const raw = Buffer.alloc(size * (size * 4 + 1));
+  ihdr[8] = 8;            // bit depth
+  ihdr[9] = alpha ? 6 : 2; // 6 = RGBA, 2 = RGB
+  const stride = size * ch + 1;
+  const raw = Buffer.alloc(size * stride);
   for (let y = 0; y < size; y++) {
-    raw[y * (size * 4 + 1)] = 0; // filter none
-    rgba.copy(raw, y * (size * 4 + 1) + 1, y * size * 4, (y + 1) * size * 4);
+    raw[y * stride] = 0; // filter none
+    if (alpha) {
+      rgba.copy(raw, y * stride + 1, y * size * 4, (y + 1) * size * 4);
+    } else {
+      for (let x = 0; x < size; x++) {
+        const s = (y * size + x) * 4;
+        const d = y * stride + 1 + x * 3;
+        raw[d] = rgba[s]; raw[d + 1] = rgba[s + 1]; raw[d + 2] = rgba[s + 2];
+      }
+    }
   }
   return Buffer.concat([
     Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
@@ -59,7 +71,7 @@ const CARD = [255, 255, 255];
 const BAR1 = [165, 180, 252];   // indigo-300
 const BAR2 = [199, 210, 254];   // indigo-200
 
-function drawIcon(size, opaque) {
+function drawIcon(size, opaque, alpha = true) {
   const rgba = Buffer.alloc(size * size * 4);
   const s = size;
   const rot = -8 * (Math.PI / 180);
@@ -93,18 +105,22 @@ function drawIcon(size, opaque) {
       rgba[i] = r / 4; rgba[i + 1] = g / 4; rgba[i + 2] = b / 4; rgba[i + 3] = a / 4;
     }
   }
-  return encodePng(s, rgba);
+  return encodePng(s, rgba, alpha);
 }
 
 export function generateIcons() {
+  // [path, size, opaque (full-bleed square vs rounded w/ transparent corners), alpha channel]
   const targets = [
-    ['public/icon-192.png', 192, false],
-    ['public/icon-512.png', 512, false],
-    ['public/apple-touch-icon.png', 180, true],
+    ['public/icon-192.png', 192, false, true],
+    ['public/icon-512.png', 512, false, true],
+    ['public/apple-touch-icon.png', 180, true, true],
+    // App Store marketing icon: 1024x1024, square, no alpha channel, no
+    // rounded corners (Apple applies its own mask).
+    ['public/icon-1024.png', 1024, true, false],
   ];
-  for (const [path, size, opaque] of targets) {
+  for (const [path, size, opaque, alpha] of targets) {
     if (!existsSync(path)) {
-      writeFileSync(path, drawIcon(size, opaque));
+      writeFileSync(path, drawIcon(size, opaque, alpha));
       console.log(`generated ${path}`);
     }
   }
