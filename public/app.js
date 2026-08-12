@@ -1042,7 +1042,10 @@ async function viewImport() {
     out.innerHTML = '<p class="notice">Parsing… (this can take a moment for big decks)</p>';
     try {
       await loadImporter();
-      const decks = await window.ApkgImporter.parseApkg(file);
+      const [decks, mine] = await Promise.all([
+        window.ApkgImporter.parseApkg(file),
+        api(`/decks?dayStart=${dayStart()}`).then((r) => r.decks),
+      ]);
       if (!decks.length) throw new Error('No usable cards found in this file.');
       out.innerHTML = `
         ${decks.map((d, i) => `
@@ -1052,15 +1055,32 @@ async function viewImport() {
             <span class="pill">${d.cards.length}</span>
           </div>`).join('')}
         <div class="form" style="margin-bottom:10px">
-          <label>Front language (speech)</label>${langSelect('imp-fl', 'en-US')}
-          <label>Back language (speech)</label>${langSelect('imp-bl', 'de-DE')}
+          <label>Import into</label>
+          <select id="imp-target">
+            <option value="">New deck(s), named like the file</option>
+            ${mine.map((d) => `<option value="${d.id}">Add to “${esc(d.name)}”</option>`).join('')}
+          </select>
+          <div id="imp-langs">
+            <label>Front language (speech)</label>${langSelect('imp-fl', 'en-US')}
+            <label>Back language (speech)</label>${langSelect('imp-bl', 'de-DE')}
+          </div>
         </div>
         <div class="actions"><button class="primary" id="doimport">Import selected</button></div>
         <div id="prog"></div>`;
+      // language pickers only apply to newly created decks
+      document.getElementById('imp-target').onchange = (e) => {
+        document.getElementById('imp-langs').hidden = !!e.target.value;
+      };
       document.getElementById('doimport').onclick = async () => {
         const frontLang = document.getElementById('imp-fl').value;
         const backLang = document.getElementById('imp-bl').value;
-        const chosen = decks.filter((_, i) => document.getElementById(`dk${i}`).checked);
+        const targetId = document.getElementById('imp-target').value;
+        const target = mine.find((d) => String(d.id) === targetId);
+        let chosen = decks.filter((_, i) => document.getElementById(`dk${i}`).checked);
+        if (target) {
+          // funnel every selected card into the chosen existing deck
+          chosen = [{ name: target.name, cards: chosen.flatMap((d) => d.cards) }];
+        }
         const totalCards = chosen.reduce((n, d) => n + d.cards.length, 0);
         const prog = document.getElementById('prog');
         let sent = 0, imported = 0, skipped = 0;
