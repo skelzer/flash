@@ -16,7 +16,15 @@
   <div id="app"></div>
   <script type="module" src="./app.js"></script>
   <script>
-    if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js');
+    if (window.Capacitor?.isNativePlatform?.()) {
+      // native assets are bundled and served from capacitor://localhost; a leftover
+      // service worker would shadow them with stale web assets
+      navigator.serviceWorker?.getRegistrations?.()
+        .then((rs) => rs.forEach((r) => r.unregister()))
+        .catch(() => {});
+    } else if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('./sw.js');
+    }
   </script>
 </body>
 </html>

@@ -3,6 +3,31 @@ const $app = document.getElementById('app');
 // Directory the app is served from: '/' on workers.dev, '/flash/' on the custom domain
 const BASE = location.pathname.replace(/[^/]*$/, '');
 
+// ---------- native (Capacitor) ----------
+
+// Capacitor injects window.Capacitor before module scripts run; on the web it is undefined,
+// so IS_NATIVE is false and every native branch below is dead code in the browser.
+const IS_NATIVE = !!window.Capacitor?.isNativePlatform?.();
+// Native builds bundle the assets locally (capacitor://localhost), so /api must be absolute.
+const API_BASE = IS_NATIVE ? 'https://flash.luquematte.com/' : BASE;
+// iOS OAuth client ID (public by design). TODO(miguel): paste real iOS client ID.
+const GOOGLE_IOS_CLIENT_ID = '';
+
+const plugin = (name) => (IS_NATIVE ? window.Capacitor?.Plugins?.[name] : undefined);
+
+// no-op on the web (window.Capacitor is undefined); never lets a missing plugin surface
+function haptic(kind, opts) {
+  try { window.Capacitor?.Plugins?.Haptics?.[kind]?.(opts)?.catch?.(() => {}); } catch { /* ignore */ }
+}
+
+// match the status bar text to the theme the app is already following via prefers-color-scheme
+function applyNativeStatusBar() {
+  try {
+    const dark = window.matchMedia?.('(prefers-color-scheme: dark)')?.matches;
+    plugin('StatusBar')?.setStyle?.({ style: dark ? 'DARK' : 'LIGHT' })?.catch?.(() => {});
+  } catch { /* ignore */ }
+}
+
 // ---------- helpers ----------
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (ch) =>
@@ -25,8 +50,11 @@ function dayStart() {
 
 const newLimit = () => Number(localStorage.getItem('newLimit') || 20);
 
+// endpoints that mint a session: a 401 from these is a bad-credentials answer, not an expired token
+const AUTH_FREE = new Set(['/login', '/register', '/auth/google', '/auth/apple']);
+
 async function api(path, opts = {}) {
-  const res = await fetch(`${BASE}api${path}`, {
+  const res = await fetch(`${API_BASE}api${path}`, {
     ...opts,
     headers: {
       'content-type': 'application/json',
@@ -34,8 +62,8 @@ async function api(path, opts = {}) {
       ...opts.headers,
     },
   });
-  if (res.status === 401 && path !== '/login' && path !== '/register') {
-    localStorage.removeItem('token');
+  if (res.status === 401 && !AUTH_FREE.has(path)) {
+    clearAuth();
     location.hash = '#login';
     throw new Error('unauthorized');
   }
@@ -44,6 +72,47 @@ async function api(path, opts = {}) {
     throw new Error(body.error || `Request failed (${res.status})`);
   }
   return res.json();
+}
+
+// ---------- session ----------
+
+// localStorage is the synchronous source of truth everywhere. On native it is backed by the
+// WKWebView store, which iOS may evict, so we mirror into Capacitor Preferences and read that
+// back at boot. Mirroring is fire-and-forget: a failure never blocks or breaks sign-in.
+function mirrorAuth(entries) {
+  const prefs = plugin('Preferences');
+  if (!prefs) return;
+  try {
+    for (const [key, value] of entries) {
+      const p = value === null ? prefs.remove({ key }) : prefs.set({ key, value: String(value) });
+      p?.catch?.(() => {});
+    }
+  } catch { /* native storage is a nicety; localStorage already holds the session */ }
+}
+
+function setAuth(token, username) {
+  localStorage.setItem('token', token);
+  localStorage.setItem('username', username);
+  mirrorAuth([['token', token ?? ''], ['username', username ?? '']]);
+}
+
+function clearAuth() {
+  localStorage.removeItem('token');
+  localStorage.removeItem('username');
+  mirrorAuth([['token', null], ['username', null]]);
+}
+
+// Native only: restore a session the webview store lost. Runs before the first render().
+async function hydrateAuth() {
+  const prefs = plugin('Preferences');
+  if (!prefs || localStorage.getItem('token')) return;
+  try {
+    const { value: token } = (await prefs.get({ key: 'token' })) || {};
+    if (!token) return;
+    localStorage.setItem('token', token);
+    const { value: username } = (await prefs.get({ key: 'username' })) || {};
+    if (username) localStorage.setItem('username', username);
+  } catch { /* no stored session: the route guard sends us to #login */ }
 }
 
 const LANGS = [
@@ -148,11 +217,34 @@ let googleClientId; // undefined = not fetched yet, null = not configured
 async function fetchConfig() {
   if (googleClientId !== undefined) return;
   try {
-    const res = await fetch(`${BASE}api/config`);
-    googleClientId = (await res.json()).googleClientId;
+    googleClientId = (await api('/config')).googleClientId;
   } catch {
     googleClientId = null;
   }
+}
+
+// ---------- native sign-in (@capgo/capacitor-social-login) ----------
+
+// 32 random hex chars; the backend binds this to the Apple identity token's nonce claim
+const authNonce = () => Array.from(crypto.getRandomValues(new Uint8Array(16)))
+  .map((b) => b.toString(16).padStart(2, '0')).join('');
+
+// user dismissed the Apple/Google sheet — not an error worth showing
+const isCancellation = (err) => /cancel|abort|1001|12501|dismiss/i.test(
+  `${err?.code ?? ''} ${err?.errorMessage ?? ''} ${err?.message ?? ''}`);
+
+let socialLoginReady; // memoized: initialize() runs once, on the first button tap
+function initSocialLogin() {
+  if (socialLoginReady) return socialLoginReady;
+  const SocialLogin = plugin('SocialLogin');
+  if (!SocialLogin) return Promise.reject(new Error('Sign-in is unavailable in this build'));
+  socialLoginReady = SocialLogin.initialize({
+    ...(GOOGLE_IOS_CLIENT_ID ? { google: { iOSClientId: GOOGLE_IOS_CLIENT_ID } } : {}),
+    apple: {},
+  }).then(() => SocialLogin);
+  // a failed init must not poison later taps
+  socialLoginReady.catch(() => { socialLoginReady = undefined; });
+  return socialLoginReady;
 }
 
 function loadGsi() {
@@ -178,7 +270,13 @@ function viewLogin() {
         <img class="logo" src="./wizard.gif" alt="Flash wizard" width="88" height="88">
         <h1>Flash</h1>
         <p class="notice">Sign in to study</p>
-        <div id="gsi-btn" style="display:flex;justify-content:center;min-height:44px"></div>
+        ${IS_NATIVE
+          ? `<div class="nativeauth">
+              <button class="authbtn apple" id="apple-btn">&nbsp;Continue with Apple</button>
+              ${GOOGLE_IOS_CLIENT_ID
+                ? `<button class="authbtn google" id="google-btn">Continue with Google</button>` : ''}
+            </div>`
+          : `<div id="gsi-btn" style="display:flex;justify-content:center;min-height:44px"></div>`}
         <div id="err" class="error"></div>
         <button id="alt" style="background:none;color:var(--muted);font-size:13.5px;text-decoration:underline">
           ${showPw ? 'Hide' : 'Use username & password instead'}
@@ -203,8 +301,7 @@ function viewLogin() {
             password: document.getElementById('pass').value,
           }),
         });
-        localStorage.setItem('token', token);
-        localStorage.setItem('username', username);
+        setAuth(token, username);
         location.hash = '#decks';
       } catch (err) {
         document.getElementById('err').textContent = err.message;
@@ -217,26 +314,76 @@ function viewLogin() {
       el.onkeydown = (e) => { if (e.key === 'Enter') submit(); };
     });
     if (showPw) document.getElementById('user').focus();
+    if (IS_NATIVE) {
+      const appleBtn = document.getElementById('apple-btn');
+      if (appleBtn) appleBtn.onclick = () => nativeSignIn('apple');
+      const googleBtn = document.getElementById('google-btn');
+      if (googleBtn) googleBtn.onclick = () => nativeSignIn('google');
+    }
     setupGoogle();
   };
 
+  const showErr = (msg) => {
+    const el = document.getElementById('err');
+    if (el) el.textContent = msg;
+  };
+
   const googleSignIn = async (credential) => {
-    const res = await fetch(`${BASE}api/auth/google`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ credential }),
-    });
-    const body = await res.json();
-    if (res.ok) {
-      localStorage.setItem('token', body.token);
-      localStorage.setItem('username', body.username);
+    try {
+      const { token, username } = await api('/auth/google', {
+        method: 'POST',
+        body: JSON.stringify({ credential }),
+      });
+      setAuth(token, username);
       location.hash = '#decks';
-      return;
+    } catch (err) {
+      showErr(err.message || 'Google sign-in failed');
     }
-    document.getElementById('err').textContent = body.error || 'Google sign-in failed';
+  };
+
+  // Opens the platform sheet. Resolves to null when the user dismisses it, so a
+  // cancellation stays silent while real failures (network, token exchange) still surface.
+  const socialLogin = async (provider, options) => {
+    const SocialLogin = await initSocialLogin();
+    try {
+      const { result } = await SocialLogin.login({ provider, options });
+      return result;
+    } catch (err) {
+      if (isCancellation(err)) return null;
+      throw err;
+    }
+  };
+
+  // native only: Apple / Google sheets via the social-login plugin, then the same
+  // token exchange the web flow uses
+  const nativeSignIn = async (provider) => {
+    showErr('');
+    try {
+      if (provider === 'apple') {
+        const nonce = authNonce();
+        const result = await socialLogin('apple', { scopes: ['email'], nonce });
+        if (!result) return;
+        const identityToken = result.idToken || result.identityToken;
+        if (!identityToken) throw new Error('Apple did not return an identity token');
+        const { token, username } = await api('/auth/apple', {
+          method: 'POST',
+          body: JSON.stringify({ identityToken, nonce }),
+        });
+        setAuth(token, username);
+        location.hash = '#decks';
+        return;
+      }
+      const result = await socialLogin('google', { scopes: ['email', 'profile'] });
+      if (!result) return;
+      if (!result.idToken) throw new Error('Google did not return an ID token');
+      await googleSignIn(result.idToken);
+    } catch (err) {
+      showErr(err?.message || 'Sign-in failed');
+    }
   };
 
   async function setupGoogle() {
+    if (IS_NATIVE) return; // native uses the platform buttons; GIS is never injected
     await fetchConfig();
     const altBtn = document.getElementById('alt');
     if (!googleClientId) {
@@ -306,7 +453,8 @@ async function viewDecks() {
     <p class="statline">${stats.reviewsToday} reviews today · ${stats.reviewsWeek} this week · ${stats.totalCards} cards ·
       new/day <input id="nl" type="number" min="0" max="200" value="${newLimit()}" style="width:58px;padding:2px 6px;display:inline-block"></p>
     <p class="statline">${esc(localStorage.getItem('username') || '')} ·
-      <button id="signout" style="background:none;color:var(--muted);text-decoration:underline;font-size:13.5px;padding:0">Sign out</button></p>`;
+      <button id="signout" style="background:none;color:var(--muted);text-decoration:underline;font-size:13.5px;padding:0">Sign out</button> ·
+      <button id="delacct" class="linkbtn danger">Delete account</button></p>`;
 
   $app.querySelectorAll('.deck-row').forEach((el) => {
     el.onclick = (e) => {
@@ -346,9 +494,20 @@ async function viewDecks() {
   };
   document.getElementById('signout').onclick = async () => {
     try { await api('/logout', { method: 'POST' }); } catch { /* session may already be gone */ }
-    localStorage.removeItem('token');
-    localStorage.removeItem('username');
+    clearAuth();
     location.hash = '#login';
+  };
+  document.getElementById('delacct').onclick = async () => {
+    const who = localStorage.getItem('username') || 'this account';
+    if (!confirm('Delete your account?')) return;
+    if (!confirm(`Permanently delete "${who}"? All decks, cards and review history are erased. This cannot be undone.`)) return;
+    try {
+      await api('/account', { method: 'DELETE' });
+      clearAuth();
+      location.hash = '#login';
+    } catch (err) {
+      toast(err.message);
+    }
   };
 }
 
@@ -424,6 +583,7 @@ async function viewStudy(deckId) {
   function next() {
     showingBack = false;
     if (!queue.length) {
+      haptic('notification', { type: 'SUCCESS' });
       $app.innerHTML = `${topbar(deckName)}
         <div class="sbar"><span style="width:100%"></span></div>
         <div class="done">
@@ -480,6 +640,7 @@ async function viewStudy(deckId) {
   }
 
   async function rate(rating) {
+    haptic('impact', { style: 'LIGHT' });
     reviewed++;
     const id = current.id;
     showingBack = false;
@@ -1108,4 +1269,11 @@ async function viewImport() {
   };
 }
 
-render();
+// Web boot is unchanged: render() runs synchronously at module evaluation.
+// Native waits for the Preferences session restore so the route guard sees the token.
+if (IS_NATIVE) {
+  applyNativeStatusBar();
+  hydrateAuth().then(render, render);
+} else {
+  render();
+}

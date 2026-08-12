@@ -20,6 +20,9 @@
   --shadow-2: 0 2px 4px rgb(16 18 27 / 6%), 0 12px 32px -12px rgb(16 18 27 / 18%);
   --glow-a: rgb(99 102 241 / 10%);
   --glow-b: rgb(124 58 237 / 8%);
+  /* native sign-in buttons (iOS): Apple HIG wants black-on-light, white-on-dark */
+  --apple-bg: #000000;
+  --apple-fg: #ffffff;
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -35,6 +38,8 @@
     --shadow-2: 0 2px 6px rgb(0 0 0 / 35%), 0 16px 40px -16px rgb(0 0 0 / 55%);
     --glow-a: rgb(99 102 241 / 13%);
     --glow-b: rgb(124 58 237 / 10%);
+    --apple-bg: #ffffff;
+    --apple-fg: #000000;
   }
 }
 
@@ -63,7 +68,14 @@ input, textarea {
   min-height: 100dvh;
   display: flex;
   flex-direction: column;
-  padding: env(safe-area-inset-top) 16px calc(16px + env(safe-area-inset-bottom));
+  /* Safe areas live here so every view inherits them: the .topbar clears the notch and the
+     bottom-most UI (grade buttons, deck footer) clears the home indicator. env() is 0 in
+     browsers, so this resolves to exactly 0/16px/16px on the web — rendering is unchanged.
+     .toast is position:fixed and carries its own bottom inset. */
+  padding-top: env(safe-area-inset-top);
+  padding-right: max(16px, env(safe-area-inset-right));
+  padding-bottom: calc(16px + env(safe-area-inset-bottom));
+  padding-left: max(16px, env(safe-area-inset-left));
 }
 
 /* entrance animation on every view change */
@@ -337,6 +349,45 @@ label { font-size: 13px; font-weight: 600; color: var(--muted); margin-bottom: -
 .notice { color: var(--muted); font-size: 13.5px; }
 
 #pwform:not([hidden]) { display: flex; flex-direction: column; gap: 12px; margin-top: 4px; }
+
+/* native sign-in (iOS build only — never rendered on the web) */
+.nativeauth { display: flex; flex-direction: column; gap: 10px; }
+.authbtn {
+  width: 100%;
+  padding: 14px 18px;
+  border-radius: 99px;
+  font-size: 16.5px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  text-align: center;
+  box-shadow: var(--shadow-1);
+}
+.authbtn.apple {
+  background: var(--apple-bg);
+  color: var(--apple-fg);
+  border: 1px solid var(--apple-bg);
+  font-weight: 500;
+  /* the  glyph in the label only resolves on Apple platforms, where this button lives */
+  font-family: -apple-system, system-ui, sans-serif;
+}
+.authbtn.google {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+.authbtn.google:hover { border-color: color-mix(in srgb, var(--accent) 40%, var(--border)); }
+
+/* subdued inline text buttons in footers (sign out / delete account) */
+.linkbtn {
+  background: none;
+  color: var(--muted);
+  text-decoration: underline;
+  font-size: 13.5px;
+  padding: 0;
+  border-radius: 0;
+}
+.linkbtn.danger { color: color-mix(in srgb, var(--again) 62%, var(--muted)); }
+.linkbtn.danger:hover { color: var(--again); }
 
 /* import */
 .import-deck {
