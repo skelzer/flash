@@ -16,7 +16,13 @@
   "workers_dev": true,
   "vars": {
     // OAuth client ID from Google Cloud Console; empty = Google sign-in hidden
-    "GOOGLE_CLIENT_ID": "312332025518-hm2cf8d9jvm3o6nonom03bqgo07no4i9.apps.googleusercontent.com"
+    "GOOGLE_CLIENT_ID": "312332025518-hm2cf8d9jvm3o6nonom03bqgo07no4i9.apps.googleusercontent.com",
+    // iOS OAuth client ID for the same Google project; ID tokens minted for the
+    // native app carry this audience instead. Empty = accepted audiences are
+    // just the web one above.
+    "GOOGLE_IOS_CLIENT_ID": "",
+    // the iOS bundle ID doubles as the audience of Apple's identity tokens
+    "APPLE_BUNDLE_ID": "com.luquematte.flash"
   },
   "d1_databases": [
     {

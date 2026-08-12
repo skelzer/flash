@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { cors } from 'hono/cors';
 import { schedule, predictions } from './scheduler.js';
 
 const app = new Hono();
@@ -39,29 +40,45 @@ async function createSession(db, userId) {
   return token;
 }
 
-// ---- Google sign-in ----
+// ---- OIDC sign-in (Google, Apple) ----
+
+const GOOGLE_JWKS = 'https://www.googleapis.com/oauth2/v3/certs';
+const GOOGLE_ISSUERS = ['accounts.google.com', 'https://accounts.google.com'];
+const APPLE_JWKS = 'https://appleid.apple.com/auth/keys';
+const APPLE_ISSUERS = ['https://appleid.apple.com'];
 
 const b64urlToBytes = (s) => {
   const b = atob(s.replace(/-/g, '+').replace(/_/g, '/'));
   return Uint8Array.from(b, (ch) => ch.charCodeAt(0));
 };
 
-let jwksCache = { keys: null, fetched: 0 };
+// One cache entry per JWKS endpoint (Google and Apple each have their own),
+// refreshed hourly.
+const jwksCaches = new Map();
 
-// Verifies a Google ID token: signature against Google's published keys,
-// then issuer, audience, and expiry. Returns the payload or null.
-async function verifyGoogleToken(credential, clientId) {
+async function fetchJwks(jwksUrl) {
+  const cached = jwksCaches.get(jwksUrl);
+  if (cached && Date.now() - cached.fetched <= 3_600_000) return cached.keys;
+  const res = await fetch(jwksUrl);
+  const keys = (await res.json()).keys;
+  jwksCaches.set(jwksUrl, { keys, fetched: Date.now() });
+  return keys;
+}
+
+// Verifies an OIDC ID token: signature against the issuer's published keys,
+// then issuer, audience, and expiry. Google and Apple both sign with RS256,
+// so one implementation covers both. `audiences` is a Set (an empty one
+// rejects everything, which is what an unconfigured client ID should do).
+// Returns the payload or null.
+async function verifyIdToken(token, { jwksUrl, issuers, audiences }) {
   try {
-    const [h, p, sig] = credential.split('.');
+    const [h, p, sig] = token.split('.');
     if (!sig) return null;
     const header = JSON.parse(new TextDecoder().decode(b64urlToBytes(h)));
     const payload = JSON.parse(new TextDecoder().decode(b64urlToBytes(p)));
 
-    if (!jwksCache.keys || Date.now() - jwksCache.fetched > 3_600_000) {
-      const res = await fetch('https://www.googleapis.com/oauth2/v3/certs');
-      jwksCache = { keys: (await res.json()).keys, fetched: Date.now() };
-    }
-    const jwk = jwksCache.keys.find((k) => k.kid === header.kid);
+    const keys = await fetchJwks(jwksUrl);
+    const jwk = keys.find((k) => k.kid === header.kid);
     if (!jwk) return null;
 
     const key = await crypto.subtle.importKey(
@@ -71,14 +88,41 @@ async function verifyGoogleToken(credential, clientId) {
       'RSASSA-PKCS1-v1_5', key, b64urlToBytes(sig), new TextEncoder().encode(`${h}.${p}`)
     );
     if (!valid) return null;
-    if (!['accounts.google.com', 'https://accounts.google.com'].includes(payload.iss)) return null;
-    if (payload.aud !== clientId) return null;
+    if (!issuers.includes(payload.iss)) return null;
+    if (!audiences.has(payload.aud)) return null;
     if (payload.exp * 1000 < Date.now()) return null;
     return payload;
   } catch {
     return null;
   }
 }
+
+// Derive a free username from an email local-part, numbering off collisions.
+async function usernameFromEmail(db, email) {
+  const base = ((email || 'user').split('@')[0].replace(/[^a-zA-Z0-9_.-]/g, '').slice(0, 20) || 'user')
+    .padEnd(3, '0');
+  let username = base;
+  for (let n = 2; ; n++) {
+    const taken = await db.prepare('SELECT id FROM users WHERE username = ?').bind(username).first();
+    if (!taken) break;
+    username = `${base}${n}`;
+  }
+  return username;
+}
+
+// ---- CORS ----
+// The web frontend is same-origin and never needs this; the iOS (Capacitor)
+// build loads from capacitor://localhost and calls the API cross-origin.
+// Auth is a bearer token, not a cookie, so credentials mode stays off.
+// Registered before every /api route so it also covers the handlers below.
+const CORS_ORIGINS = new Set(['capacitor://localhost', 'http://localhost:8787', 'http://127.0.0.1:8787']);
+
+app.use('/api/*', cors({
+  origin: (o) => (CORS_ORIGINS.has(o) ? o : null),
+  allowHeaders: ['authorization', 'content-type'],
+  allowMethods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
+  maxAge: 86400,
+}));
 
 // ---- auth routes ----
 
@@ -88,22 +132,71 @@ app.get('/api/config', (c) => c.json({ googleClientId: c.env.GOOGLE_CLIENT_ID ||
 app.post('/api/auth/google', async (c) => {
   const { credential } = await c.req.json();
   if (!c.env.GOOGLE_CLIENT_ID) return c.json({ error: 'Google sign-in is not configured' }, 500);
-  const payload = await verifyGoogleToken(credential, c.env.GOOGLE_CLIENT_ID);
+  // the web build and the iOS build authenticate against different Google
+  // client IDs; either audience is acceptable here
+  const payload = await verifyIdToken(credential, {
+    jwksUrl: GOOGLE_JWKS,
+    issuers: GOOGLE_ISSUERS,
+    audiences: new Set([c.env.GOOGLE_CLIENT_ID, c.env.GOOGLE_IOS_CLIENT_ID].filter(Boolean)),
+  });
   if (!payload?.sub) return c.json({ error: 'Google sign-in failed, try again' }, 401);
 
   let user = await c.env.DB.prepare('SELECT * FROM users WHERE google_sub = ?').bind(payload.sub).first();
   if (!user) {
-    // derive a unique username from the email
-    const base = ((payload.email || 'user').split('@')[0].replace(/[^a-zA-Z0-9_.-]/g, '').slice(0, 20) || 'user')
-      .padEnd(3, '0');
-    let username = base;
-    for (let n = 2; ; n++) {
-      const taken = await c.env.DB.prepare('SELECT id FROM users WHERE username = ?').bind(username).first();
-      if (!taken) break;
-      username = `${base}${n}`;
-    }
+    const username = await usernameFromEmail(c.env.DB, payload.email);
     const res = await c.env.DB.prepare(
       "INSERT INTO users (username, pass_hash, salt, google_sub, email, created_at) VALUES (?, '', '', ?, ?, ?)"
+    ).bind(username, payload.sub, payload.email || null, Date.now()).run();
+    user = { id: res.meta.last_row_id, username };
+    await cloneStarterDeck(c.env.DB, user.id);
+  }
+
+  const token = await createSession(c.env.DB, user.id);
+  return c.json({ token, username: user.username });
+});
+
+// Sign in with Apple (iOS app only — the web build has no Apple button).
+app.post('/api/auth/apple', async (c) => {
+  const { identityToken, nonce } = await c.req.json().catch(() => ({}));
+  const payload = await verifyIdToken(identityToken || '', {
+    jwksUrl: APPLE_JWKS,
+    issuers: APPLE_ISSUERS,
+    audiences: new Set([c.env.APPLE_BUNDLE_ID].filter(Boolean)),
+  });
+  if (!payload?.sub) return c.json({ error: 'Apple sign-in failed' }, 401);
+
+  // Bind the token to this request's nonce. Apple echoes back whatever the
+  // client sent it, and clients differ: some Capacitor plugins hash the nonce
+  // with SHA-256 before passing it to Apple, others hand it over raw. Accept
+  // either shape of the value the app tells us it used.
+  if (payload.nonce) {
+    if (typeof nonce !== 'string' || !nonce) return c.json({ error: 'Apple sign-in failed' }, 401);
+    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(nonce));
+    const hashed = bytesToHex(new Uint8Array(digest));
+    if (String(payload.nonce).toLowerCase() !== hashed && payload.nonce !== nonce) {
+      return c.json({ error: 'Apple sign-in failed' }, 401);
+    }
+  }
+
+  let user = await c.env.DB.prepare('SELECT * FROM users WHERE apple_sub = ?').bind(payload.sub).first();
+
+  // Apple only sends the email on the first authorization, and marks it
+  // verified as either a boolean or the string "true". When we do get one,
+  // adopt any existing account with that address so signing in with Apple
+  // lands on the same account as Google/password. Hidden-relay addresses
+  // (@privaterelay.appleid.com) simply never match and fall through.
+  const emailVerified = payload.email_verified === true || payload.email_verified === 'true';
+  if (!user && payload.email && emailVerified) {
+    user = await c.env.DB.prepare('SELECT * FROM users WHERE email = ?').bind(payload.email).first();
+    if (user) {
+      await c.env.DB.prepare('UPDATE users SET apple_sub = ? WHERE id = ?').bind(payload.sub, user.id).run();
+    }
+  }
+
+  if (!user) {
+    const username = await usernameFromEmail(c.env.DB, payload.email);
+    const res = await c.env.DB.prepare(
+      "INSERT INTO users (username, pass_hash, salt, apple_sub, email, created_at) VALUES (?, '', '', ?, ?, ?)"
     ).bind(username, payload.sub, payload.email || null, Date.now()).run();
     user = { id: res.meta.last_row_id, username };
     await cloneStarterDeck(c.env.DB, user.id);
@@ -155,7 +248,7 @@ app.post('/api/login', async (c) => {
 
 app.use('/api/*', async (c, next) => {
   const path = c.req.path;
-  if (['/api/login', '/api/register', '/api/auth/google', '/api/config'].includes(path)) return next();
+  if (['/api/login', '/api/register', '/api/auth/google', '/api/auth/apple', '/api/config'].includes(path)) return next();
   const token = (c.req.header('authorization') || '').replace(/^Bearer /, '');
   if (!token) return c.json({ error: 'unauthorized' }, 401);
   const session = await c.env.DB.prepare(
@@ -172,6 +265,25 @@ app.use('/api/*', async (c, next) => {
 
 app.post('/api/logout', async (c) => {
   await c.env.DB.prepare('DELETE FROM sessions WHERE token = ?').bind(c.get('token')).run();
+  return c.json({ ok: true });
+});
+
+// Permanent account deletion (App Store requirement for accounts created in
+// the app). sessions.user_id and decks.user_id are plain references with no
+// ON DELETE CASCADE, so unwind by hand, child-first. Every session goes, which
+// signs the account out on all devices.
+app.delete('/api/account', async (c) => {
+  const uid = c.get('uid');
+  await c.env.DB.batch([
+    c.env.DB.prepare(
+      `DELETE FROM reviews WHERE card_id IN
+         (SELECT id FROM cards WHERE deck_id IN (SELECT id FROM decks WHERE user_id = ?))`
+    ).bind(uid),
+    c.env.DB.prepare('DELETE FROM cards WHERE deck_id IN (SELECT id FROM decks WHERE user_id = ?)').bind(uid),
+    c.env.DB.prepare('DELETE FROM decks WHERE user_id = ?').bind(uid),
+    c.env.DB.prepare('DELETE FROM sessions WHERE user_id = ?').bind(uid),
+    c.env.DB.prepare('DELETE FROM users WHERE id = ?').bind(uid),
+  ]);
   return c.json({ ok: true });
 });
 
